@@ -47,7 +47,7 @@ class LuaMcApi(
         } catch (e: IllegalStateException) {
             throw IllegalArgumentException(
                 "Particle '$id' requires additional parameters and cannot be used with mc.particle(). " +
-                "Use simple particles like minecraft:gust or minecraft:campfire_cosmoke instead."
+                        "Use simple particles like minecraft:gust or minecraft:campfire_cosmoke instead."
             )
         }
     }
@@ -133,7 +133,7 @@ class LuaMcApi(
     private fun broadcast(args: Varargs) {
         require(args.narg() in 1..2) { "broadcast(text, overlay = false) requires 1..2 arguments" }
         val text = args.arg(1).checkjstring()
-        val overlay = if(args.arg(2).isint()) args.arg(2).toint() else null
+        val overlay = if (args.arg(2).isint()) args.arg(2).toint() else null
 
         doBroadcast(text, null, null, null, overlay)
     }
@@ -143,7 +143,7 @@ class LuaMcApi(
         val text = args.arg(1).checkjstring()
         val (x, y, z, range) = (2..5).map { args.arg(it).checkdouble() }
         val world = requireWorldKey(args.arg(6))
-        val overlay = if(args.arg(7).isint()) args.arg(7).toint() else null
+        val overlay = if (args.arg(7).isint()) args.arg(7).toint() else null
 
         doBroadcast(text, Vec3d(x, y, z), world, range, overlay)
     }
@@ -155,7 +155,7 @@ class LuaMcApi(
             "playSound" to this::playSound.asVarArgFunction(),
             "broadcastInRange" to this::broadcastInRange.asVarArgFunction(),
             "data" to storage.getGlobalData(),
-        "time" to this::luaTime.asVarArgFunction()
+            "time" to this::luaTime.asVarArgFunction()
         )
     }
 }
