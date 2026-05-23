@@ -8,22 +8,20 @@ import net.minecraft.command.argument.EntityArgumentType
 import net.minecraft.command.argument.MessageArgumentType
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.CommandManager
-import net.minecraft.server.command.ReloadCommand
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import org.luaj.vm2.*
 import org.luaj.vm2.LuaValue.NIL
 import org.luaj.vm2.compiler.LuaC
 import org.luaj.vm2.lib.*
-import org.luaj.vm2.lib.jse.CoerceJavaToLua
 import org.luaj.vm2.lib.jse.JseBaseLib
 import org.luaj.vm2.lib.jse.JseMathLib
 import ru.pyxiion.pxrp.PxRp.Companion.logger
-import ru.pyxiion.pxrp.api.Context
 import ru.pyxiion.pxrp.api.LuaMcApi
+import ru.pyxiion.pxrp.api.Player
+import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.storage.StorageManager
 import ru.pyxiion.pxrp.types.LuaArgumentType
-import ru.pyxiion.pxrp.api.Player
 import java.io.FileOutputStream
 import kotlin.io.path.exists
 
@@ -33,7 +31,7 @@ data class LuaCommandArgument(
     val type: String
 )
 
-// Loads and manages Lua-based commands from the pxrp.lua configuration file.
+// Loads and manages Lua-based commands from the config/pxrp/ directory.
 // Bridges Lua script functions with Minecraft's Brigadier command system.
 class LuaCmdLoader(
     private val server: MinecraftServer,
@@ -45,7 +43,7 @@ class LuaCmdLoader(
     // Maps argument type names (used in Lua scripts) to their Brigadier node builders and runtime value extractors
     private val argumentTypes = mapOf(
         "text" to object : LuaArgumentType {
-            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): String {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
                 val msg = MessageArgumentType.getMessage(ctx, name)
                 return msg.literalString ?: msg.string
             }
@@ -55,8 +53,8 @@ class LuaCmdLoader(
             }
         },
         "target" to object : LuaArgumentType {
-            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Player {
-                return Player.fromMcPlayer(EntityArgumentType.getPlayer(ctx, name)!!)
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return Player(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
             }
 
             override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
@@ -74,6 +72,9 @@ class LuaCmdLoader(
     // Manages Lua event handlers registered via mc.on()
     val eventManager = LuaEventManager()
 
+    // Task scheduler for mc.schedule / mc.scheduleRepeating
+    val scheduler: Scheduler get() = api.scheduler
+
     // Sets up the Lua globals environment: installs standard libraries and registers
     // the `register` function and `mc` API table for Lua scripts
     fun prepareGlobals() {
@@ -88,6 +89,9 @@ class LuaCmdLoader(
 //        globals.load(CoroutineLib())
         globals.load(JseMathLib())
 
+        val pxrpDir = FabricLoader.getInstance().configDir.resolve("pxrp").toAbsolutePath()
+        globals.get("package").set("path", LuaValue.valueOf("${pxrpDir}/?.lua;${pxrpDir}/?/init.lua;?.lua"))
+
         globals.set("register", this::register.asVarArgFunction())
         val mcTable = api.toTable()
         val onHandler: (Varargs) -> Varargs = { args: Varargs ->
@@ -101,34 +105,57 @@ class LuaCmdLoader(
         globals.set("mc", mcTable)
     }
 
-    // (Re)loads the pxrp.lua script: reads the file, reinitializes globals,
-    // executes the script, and registers all commands defined in it
+    // (Re)loads all Lua scripts from config/pxrp/ (or legacy config/pxrp.lua):
+    // reinitializes globals, executes each script, registers all commands
     fun reload() {
         storageManager.saveAll()
         if (commandManager == null)
             commandManager = LuaCommandManager(server)
-        val lua = getLuaFile()
 
         commandManager!!.clear()
         eventManager.clear()
+        scheduler.clear()
         prepareGlobals()
-        globals.load(lua, "pxrp.lua").call()
+
+        val sources = getLuaSources()
+        for ((name, source) in sources) {
+            globals.load(source, name).call()
+        }
+
         commandManager!!.registerAll()
         logger.info("PxRP зарегистрировал свои команды")
     }
 
-    // Reads the pxrp.lua file from the config directory. If it doesn't exist,
-    // copies the default bundled version from the mod JAR into the config directory
-    private fun getLuaFile(): String {
-        val path = FabricLoader.getInstance().configDir.resolve("pxrp.lua")
-        if (!path.exists()) {
-            logger.info("Файл pxrp.lua не найден, копируем файл по умолчанию...")
-            val resource = this::class.java.getResourceAsStream("/pxrp.lua")
-                ?: throw IllegalStateException("Default pxrp.lua not found in mod JAR")
-            resource.copyTo(FileOutputStream(path.toFile()))
+    // Collects Lua sources to load, using the first matching strategy:
+    //   1) config/pxrp/ directory — all .lua files, sorted alphabetically
+    //   2) config/pxrp.lua        — legacy single-file fallback
+    //   3) Neither exists         — creates config/pxrp/ with bundled demo.lua
+    private fun getLuaSources(): List<Pair<String, String>> {
+        val pxrpDir = FabricLoader.getInstance().configDir.resolve("pxrp")
+
+        if (pxrpDir.toFile().isDirectory()) {
+            val files = pxrpDir.toFile()
+                .listFiles { f -> f.extension == "lua" }
+                .orEmpty()
+                .sortedBy { it.name }
+            if (files.isNotEmpty()) {
+                return files.map { it.name to it.readText() }
+            }
         }
 
-        return path.toFile().bufferedReader().use { it.readText() }
+        val legacyFile = FabricLoader.getInstance().configDir.resolve("pxrp.lua")
+        if (legacyFile.exists()) {
+            return listOf("pxrp.lua" to legacyFile.toFile().readText())
+        }
+
+        pxrpDir.toFile().mkdirs()
+        val resource = this::class.java.getResourceAsStream("/demo.lua")
+            ?: throw IllegalStateException("Default demo.lua not found in mod JAR")
+        val targetFile = pxrpDir.resolve("demo.lua").toFile()
+        resource.copyTo(FileOutputStream(targetFile))
+        logger.info("Создан конфигурационный файл demo.lua в config/pxrp/")
+
+        return listOf("demo.lua" to targetFile.readText())
     }
 
 
@@ -190,17 +217,27 @@ class LuaCmdLoader(
         return result
     }
 
-    // Prepares the Lua call arguments: first argument is a Context object (wrapping the
-    // executing player), followed by the resolved command argument values (e.g. strings or Players)
     private fun prepareLuaArgAndContext(ctx: CommandContext<ServerCommandSource>, argsInfo: List<Pair<String, ArgumentCommandNode<ServerCommandSource, *>>>): Array<LuaValue> {
         val args = argsInfo.map { LuaCommandArgument(it.second.name, it.first) }
 
-        val player = Player.fromMcPlayer(ctx.source.playerOrThrow)
-        val luaCtx = Context(player)
+        val player = Player(ctx.source.playerOrThrow).toLuaValue()
+        val ctxTable = luaTableOf("player" to player)
 
-        return arrayOf(CoerceJavaToLua.coerce(luaCtx)) + args.map {
-            CoerceJavaToLua.coerce(argumentTypes[it.type]!!.getArg(ctx, it.name))
-        }.toTypedArray()
+        val result = mutableListOf<LuaValue>()
+        result.add(ctxTable)
+        for (a in args) {
+            val arg = argumentTypes[a.type]!!.getArg(ctx, a.name)
+            result.add(
+                when (arg) {
+                    is LuaValue -> arg
+                    is String -> LuaValue.valueOf(arg)
+                    else -> throw IllegalArgumentException(
+                        "Unsupported argument type: ${arg::class.simpleName ?: arg.javaClass.name}"
+                    )
+                }
+            )
+        }
+        return result.toTypedArray()
     }
 
     // Invokes the Lua handler function with the prepared context and arguments,

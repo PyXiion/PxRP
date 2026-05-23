@@ -17,9 +17,11 @@ import net.minecraft.text.Text
 import net.minecraft.util.Identifier
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.World
+import org.luaj.vm2.LuaFunction
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
+import ru.pyxiion.pxrp.Scheduler
 import ru.pyxiion.pxrp.asVarArgFunction
 import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.storage.StorageManager
@@ -28,6 +30,7 @@ class LuaMcApi(
     private val server: MinecraftServer,
     private val storage: StorageManager
 ) {
+    val scheduler = Scheduler()
     private fun <T> getRegistryKey(registryType: RegistryKey<Registry<T>>, key: String): RegistryKey<T> {
         return RegistryKey.of(registryType, Identifier.of(key))
     }
@@ -148,6 +151,30 @@ class LuaMcApi(
         doBroadcast(text, Vec3d(x, y, z), world, range, overlay)
     }
 
+    private fun luaSchedule(args: Varargs): Varargs {
+        require(args.narg() == 2) { "schedule(delay, callback) requires 2 arguments" }
+        val delay = args.arg(1).checkint()
+        val callback = args.arg(2).checkfunction()
+        val id = scheduler.schedule(delay, callback)
+        return LuaValue.valueOf(id)
+    }
+
+    private fun luaScheduleRepeating(args: Varargs): Varargs {
+        require(args.narg() == 3) { "scheduleRepeating(delay, interval, callback) requires 3 arguments" }
+        val delay = args.arg(1).checkint()
+        val interval = args.arg(2).checkint()
+        val callback = args.arg(3).checkfunction()
+        val id = scheduler.scheduleRepeating(delay, interval, callback)
+        return LuaValue.valueOf(id)
+    }
+
+    private fun luaCancelTask(args: Varargs): Varargs {
+        require(args.narg() == 1) { "cancelTask(id) requires 1 argument" }
+        val id = args.arg(1).checkint()
+        val removed = scheduler.cancel(id)
+        return LuaValue.valueOf(removed)
+    }
+
     fun toTable(): LuaTable {
         return luaTableOf(
             "particle" to this::particle.asVarArgFunction(),
@@ -155,7 +182,10 @@ class LuaMcApi(
             "playSound" to this::playSound.asVarArgFunction(),
             "broadcastInRange" to this::broadcastInRange.asVarArgFunction(),
             "data" to storage.getGlobalData(),
-            "time" to this::luaTime.asVarArgFunction()
+            "time" to this::luaTime.asVarArgFunction(),
+            "schedule" to this::luaSchedule.asVarArgFunction(),
+            "scheduleRepeating" to this::luaScheduleRepeating.asVarArgFunction(),
+            "cancelTask" to this::luaCancelTask.asVarArgFunction()
         )
     }
 }
