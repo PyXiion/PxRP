@@ -3,7 +3,7 @@
   "id": "pxrp",
   "version": "${version}",
   "name": "PxRP",
-  "description": "",
+  "description": "Lua-scriptable roleplay command framework for Fabric servers.",
   "authors": ["PyXiion"],
   "contact": {
     "PyXiion": "me@pyxiion.ru"
