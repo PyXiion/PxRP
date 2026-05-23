@@ -57,6 +57,7 @@ class LuaCommandManager(
     /**
      * Returns last arg node
      */
+    @Suppress("UNCHECKED_CAST")
     private fun mergeOrBuildArgsFrom(
         node: LiteralCommandNode<ServerCommandSource>,
         args: List<ArgumentCommandNode<ServerCommandSource, *>>

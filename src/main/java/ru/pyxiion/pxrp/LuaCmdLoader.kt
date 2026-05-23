@@ -92,6 +92,7 @@ class LuaCmdLoader(
     // (Re)loads the pxrp.lua script: reads the file, reinitializes globals,
     // executes the script, and registers all commands defined in it
     fun reload() {
+        storageManager.saveAll()
         if (commandManager == null)
             commandManager = LuaCommandManager(server)
         val lua = getLuaFile()
