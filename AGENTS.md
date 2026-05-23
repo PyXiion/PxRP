@@ -33,7 +33,8 @@ A Fabric mod (Minecraft 1.21.11) that lets server admins define chat commands vi
 ```
 src/main/java/ru/pyxiion/pxrp/
   PxRp.kt                  # ModInit — registers /pxrp reload, lifecycle hooks
-  LuaCmdLoader.kt          # Loads Lua scripts, bridges register() calls to Brigadier
+  LuaCmdLoader.kt          # Loads Lua scripts, bridges register() calls to Brigadier, registers mc.on
+  LuaEventManager.kt       # Event bus for Lua — mc.on(), fire(), clear()
   LuaCommandManager.kt     # Manages the dynamic Brigadier command tree
   Utils.kt                 # checkPermission(), luaTableOf(), asVarArgFunction()
   api/                     # Lua-facing API: Context, Player, Vector, LuaMcApi
@@ -64,7 +65,7 @@ MODRINTH.md                # Simplified README for Modrinth project page
 
 | Global | Source |
 |--------|--------|
-| `mc` | `LuaMcApi.kt` — particle, playSound, broadcast, broadcastInRange, time, data |
+| `mc` | `LuaMcApi.kt` — particle, playSound, broadcast, broadcastInRange, time, data, on |
 | `register` | `LuaCmdLoader.kt` |
 | `format`, `broadcastFormat` | `format.lua` (requires `"format"`) |
 | `registerSimple` | `simple.lua` (requires `"simple"`) |
@@ -73,6 +74,36 @@ MODRINTH.md                # Simplified README for Modrinth project page
 - `ctx.player.data` is also a `DataTable` (per-player storage)
 - `mc.time()` returns epoch seconds as double
 - `ctx.player.world` returns the **path component** of the world key (e.g. `"overworld"`, not `"minecraft:overworld"`)
+
+## Events
+
+`mc.on(event, handler)` registers a Lua handler for a game event. Handlers are cleared on `/pxrp reload`.
+
+| Event | Handler args | Fires |
+|-------|-------------|-------|
+| `player_join` | `player` | Player joins the server |
+| `player_leave` | `player` | Player disconnects |
+| `player_death` | `player`, `damageType` | Player dies (`damageType`: `"fall"`, `"player_attack"`, etc.) |
+| `player_chat` | `player`, `message` | Player sends a chat message |
+| `server_start` | — | Server finishes starting (after Lua reload) |
+| `server_stop` | — | Server is stopping (before save) |
+
+- `player` is a Player snapshot object — same shape as `ctx.player` in commands
+- Multiple handlers per event are allowed; errors in one don't affect others
+- Internally backed by `LuaEventManager.kt`
+
+### Cancellation (`player_join`, `player_chat`)
+
+Returning `false` from a handler cancels the action:
+
+| Event | Mechanism | Returning `false`... |
+|-------|-----------|---------------------|
+| `player_join` | `ServerPlayConnectionEvents.INIT` | Disconnects the player |
+| `player_chat` | `ServerMessageEvents.ALLOW_CHAT_MESSAGE` | Suppresses the message |
+
+Other events (`player_leave`, `player_death`, `server_start`, `server_stop`) are observational — return values are ignored.
+
+Note: disconnecting a player during `player_join` (INIT) triggers the server's normal disconnect flow, which also fires `player_leave`. Scripts that broadcast on `player_leave` may show a ghost leave message for rejected players.
 
 ## Storage
 

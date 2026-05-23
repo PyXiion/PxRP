@@ -5,6 +5,7 @@
 ## Features
 
 - **Lua-driven commands** — Write `.lua` files to register Brigadier commands with tab completion, argument parsing, and permission checks
+- **Event system** — React to player joins, leaves, deaths, chat messages, and server lifecycle with Lua handlers
 - **Dynamic reload** — `/pxrp reload` (or F3+T) re-executes all Lua scripts without restarting the server
 - **Minecraft API exposed to Lua** — particles, sounds, broadcasting, time
 - **Persistent data storage** — Key-value data per player and globally, auto-persisted to JSON
@@ -24,8 +25,9 @@
 2. On first run, `config/pxrp.lua` is created with example commands
 3. Run `/pxrp reload` (requires op level 4 or `pyxiion.pxrp` permission) to apply changes
 
-## Example
+## Examples
 
+### Command
 ```lua
 register("fart", {}, function(ctx)
     local player = ctx.player
@@ -33,6 +35,17 @@ register("fart", {}, function(ctx)
     broadcastFormat "*{p.name} farted*" {p = player}
     mc.particle("minecraft:gust", pos.x, pos.y + 0.6, pos.z, player.world)
     mc.playSound("minecraft:entity.slime.squish", pos.x, pos.y, pos.z, player.world, 10, 0.1)
+end)
+```
+
+### Event
+```lua
+mc.on("player_join", function(player)
+    mc.broadcast("Welcome, " .. player.name .. "!")
+end)
+
+mc.on("player_death", function(player, damageType)
+    mc.broadcast(player.name .. " died to " .. damageType)
 end)
 ```
 

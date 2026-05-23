@@ -71,6 +71,9 @@ class LuaCmdLoader(
     // Provides the Minecraft API table exposed to Lua scripts
     private val api = LuaMcApi(server, storageManager)
 
+    // Manages Lua event handlers registered via mc.on()
+    val eventManager = LuaEventManager()
+
     // Sets up the Lua globals environment: installs standard libraries and registers
     // the `register` function and `mc` API table for Lua scripts
     fun prepareGlobals() {
@@ -86,7 +89,16 @@ class LuaCmdLoader(
         globals.load(JseMathLib())
 
         globals.set("register", this::register.asVarArgFunction())
-        globals.set("mc", api.toTable())
+        val mcTable = api.toTable()
+        val onHandler: (Varargs) -> Varargs = { args: Varargs ->
+            require(args.narg() == 2) { "on(event, handler) requires 2 arguments" }
+            val eventName = args.checkjstring(1)
+            val handler = args.checkfunction(2)
+            eventManager.on(eventName, handler)
+            LuaValue.NIL
+        }
+        mcTable.set("on", onHandler.asVarArgFunction())
+        globals.set("mc", mcTable)
     }
 
     // (Re)loads the pxrp.lua script: reads the file, reinitializes globals,
@@ -98,6 +110,7 @@ class LuaCmdLoader(
         val lua = getLuaFile()
 
         commandManager!!.clear()
+        eventManager.clear()
         prepareGlobals()
         globals.load(lua, "pxrp.lua").call()
         commandManager!!.registerAll()

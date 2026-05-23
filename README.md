@@ -10,6 +10,7 @@ A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define
 ## Features
 
 - **Lua-driven commands** — Write `.lua` files to register Brigadier commands with tab completion, argument parsing, and permission checks.
+- **Event system** — React to player joins, leaves, deaths, chat messages, and server lifecycle with Lua handlers.
 - **Dynamic reload** — `/pxrp reload` re-executes all Lua scripts without restarting the server.
 - **Built-in argument types** — `text` (free-form message) and `target` (player selector with tab completion).
 - **Minecraft API exposed to Lua** — particles, sounds, global and range-limited broadcasting.
@@ -154,6 +155,79 @@ registerSimple("bow", {}, "*{p.name} bows*", nil, true)           -- title overl
 registerSimple("cheer", {}, "*{p.name} cheers*", 20, 60)          -- both
 ```
 
+### Events
+
+`mc.on(event, handler)` registers a handler that fires when a game event occurs. Handlers are cleared on `/pxrp reload`.
+
+```lua
+mc.on("player_join", function(player)
+    mc.broadcast("Welcome, " .. player.name .. "!")
+end)
+
+mc.on("player_leave", function(player)
+    mc.broadcast(player.name .. " left the server.")
+end)
+
+mc.on("player_death", function(player, damageType)
+    mc.broadcast(player.name .. " died to " .. damageType)
+end)
+
+mc.on("player_chat", function(player, message)
+    if message == "hello" then
+        mc.broadcast(player.name .. " said hello!")
+    end
+end)
+
+mc.on("server_start", function()
+    mc.data.startTime = mc.time()
+end)
+
+mc.on("server_stop", function()
+    local uptime = mc.time() - (mc.data.startTime or mc.time())
+    mc.data.lastUptime = uptime
+end)
+```
+
+| Event | Handler args | Fires |
+|-------|-------------|-------|
+| `player_join` | `player` | Player joins the server |
+| `player_leave` | `player` | Player disconnects |
+| `player_death` | `player`, `damageType` | Player dies (`"fall"`, `"player_attack"`, etc.) |
+| `player_chat` | `player`, `message` | Player sends a chat message |
+| `server_start` | — | Server finishes starting (after Lua reload) |
+| `server_stop` | — | Server is stopping (before save) |
+
+The `player` parameter is the same Player snapshot object used in command handlers (`ctx.player`). Multiple handlers per event are allowed; an error in one doesn't affect others.
+
+### Cancelling events
+
+For `player_join` and `player_chat`, returning `false` from the handler cancels the action:
+
+```lua
+-- Kick the player if they're banned
+mc.on("player_join", function(player)
+    local bans = mc.data.bans or {}
+    if bans[player.name] then
+        return false  -- player is disconnected
+    end
+end)
+
+-- Block messages containing swear words
+mc.on("player_chat", function(player, message)
+    local blocked = {"badword1", "badword2"}
+    for _, word in ipairs(blocked) do
+        if message:find(word) then
+            return false  -- message is suppressed
+        end
+    end
+end)
+```
+
+- `player_join`: fires before the player fully connects (via `INIT`). Returning `false` disconnects them.
+- `player_chat`: fires before the message is broadcast (via `ALLOW_CHAT_MESSAGE`). Returning `false` blocks the message.
+- Other events (`player_leave`, `player_death`, `server_start`, `server_stop`) are observational only — return values are ignored.
+- Note: disconnecting a rejected player during `player_join` triggers `player_leave` as well. Scripts that broadcast on leave may show a ghost message for rejected players.
+
 ### Built-in Lua standard libraries
 
 PxRP loads the following Lua standard libraries via [`luaj`](https://github.com/luaj/luaj) (targeting Lua 5.1):
@@ -262,6 +336,10 @@ if mc.time() - last < 10 then
 end
 ctx.player.data.lastFart = mc.time()
 ```
+
+### `mc.on(event, handler)`
+
+Registers a Lua handler for a game event. See the [Events](#events) section for available events and examples.
 
 ## Storage
 

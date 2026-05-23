@@ -3,15 +3,20 @@ package ru.pyxiion.pxrp
 import me.lucko.fabric.api.permissions.v0.Permissions
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
+import net.fabricmc.fabric.api.message.v1.ServerMessageEvents
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.command.permission.PermissionLevel
 import net.minecraft.server.command.CommandManager
 import net.minecraft.text.Text
 import org.luaj.vm2.LuaError
+import org.luaj.vm2.LuaValue
+import org.luaj.vm2.lib.jse.CoerceJavaToLua
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import ru.pyxiion.pxrp.api.Player
 import ru.pyxiion.pxrp.storage.JsonBackend
 import ru.pyxiion.pxrp.storage.StorageManager
 
@@ -33,17 +38,55 @@ class PxRp : ModInitializer {
                 storageManager = StorageManager(JsonBackend(storagePath))
                 luaLoader = LuaCmdLoader(server, storageManager!!)
                 luaLoader.reload()
+                luaLoader.eventManager.fire("server_start")
             } catch (e: Throwable) {
                 logger.error("Ошибка при запуске PxRP: ${e.message}", e)
             }
         })
 
         ServerLifecycleEvents.SERVER_STOPPING.register(fun(server) {
+            try {
+                if (storageManager != null) {
+                    luaLoader.eventManager.fire("server_stop")
+                }
+            } catch (_: UninitializedPropertyAccessException) { }
             storageManager?.close()
         })
 
+        ServerPlayConnectionEvents.INIT.register(fun(handler, server) {
+            if (storageManager != null) {
+                val luaPlayer = Player.fromMcPlayer(handler.player)
+                val results = luaLoader.eventManager.fireWithResults("player_join", CoerceJavaToLua.coerce(luaPlayer))
+                if (results.any { it.isboolean() && !it.toboolean() }) {
+                    handler.disconnect(Text.literal("You are not allowed to join this server"))
+                }
+            }
+        })
+
         ServerPlayConnectionEvents.DISCONNECT.register(fun(handler, server) {
+            if (storageManager != null) {
+                val luaPlayer = Player.fromMcPlayer(handler.player)
+                luaLoader.eventManager.fire("player_leave", CoerceJavaToLua.coerce(luaPlayer))
+            }
             storageManager?.removePlayerData(handler.player.uuid.toString())
+        })
+
+        ServerLivingEntityEvents.AFTER_DEATH.register(fun(entity, source) {
+            if (entity is net.minecraft.server.network.ServerPlayerEntity && storageManager != null) {
+                val luaPlayer = Player.fromMcPlayer(entity)
+                val damageTypeName = source.name.substringAfterLast(".")
+                luaLoader.eventManager.fire("player_death", CoerceJavaToLua.coerce(luaPlayer), LuaValue.valueOf(damageTypeName))
+            }
+        })
+
+        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register(fun(message, sender, networkHandler): Boolean {
+            if (storageManager != null) {
+                val luaPlayer = Player.fromMcPlayer(sender)
+                val text = message.signedBody.content
+                val results = luaLoader.eventManager.fireWithResults("player_chat", CoerceJavaToLua.coerce(luaPlayer), LuaValue.valueOf(text))
+                if (results.any { it.isboolean() && !it.toboolean() }) return false
+            }
+            return true
         })
 
         CommandRegistrationCallback.EVENT.register(fun(dispatcher, reg, env) {

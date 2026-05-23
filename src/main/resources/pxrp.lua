@@ -142,3 +142,43 @@ registerSimple("rp wave", {}, L.waveTemplate)
 registerSimple("rp laugh", {}, L.laughTemplate)
 registerSimple("rp cheer", {}, L.cheerTemplate)
 register("rp hug", {"target"}, hugCmd)
+
+
+-- События
+mc.on("player_join", function(player)
+    local bans = mc.data.bans or {}
+    if bans[player.name] then
+        return false  -- заблокировать вход
+    end
+    mc.broadcast("Добро пожаловать на сервер, " .. player.name .. "!")
+end)
+
+mc.on("player_leave", function(player)
+    mc.broadcast(player.name .. " покинул сервер!")
+end)
+
+mc.on("player_death", function(player, damageType)
+    mc.broadcast(player.name .. " умер от " .. damageType)
+end)
+
+mc.on("player_chat", function(player, message)
+    local blocked = mc.data.blockedWords or {}
+    for _, word in ipairs(blocked) do
+        if message:find(word) then
+            return false  -- заблокировать сообщение
+        end
+    end
+    if message == "!help" then
+        mc.broadcast(player.name .. ", напиши /fart, /roll, /coins или /rp help")
+    end
+end)
+
+mc.on("server_start", function()
+    mc.data.startTime = mc.time()
+    print("Сервер запущен!")
+end)
+
+mc.on("server_stop", function()
+    local uptime = mc.time() - (mc.data.startTime or mc.time())
+    print("Сервер остановлен. Аптайм: " .. math.floor(uptime) .. " секунд")
+end)
