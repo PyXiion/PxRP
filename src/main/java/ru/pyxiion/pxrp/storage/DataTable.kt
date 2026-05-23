@@ -60,6 +60,7 @@ class DataTable(
 
     fun save() {
         synchronized(lock) {
+            ensureLoaded()
             backend.save(key, toJavaMap(this))
         }
     }
