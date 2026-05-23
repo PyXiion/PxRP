@@ -79,14 +79,14 @@ MODRINTH.md                # Simplified README for Modrinth project page
 
 `mc.on(event, handler)` registers a Lua handler for a game event. Handlers are cleared on `/pxrp reload`.
 
-| Event | Handler args | Fires |
-|-------|-------------|-------|
-| `player_join` | `player` | Player joins the server |
-| `player_leave` | `player` | Player disconnects |
-| `player_death` | `player`, `damageType` | Player dies (`damageType`: `"fall"`, `"player_attack"`, etc.) |
-| `player_chat` | `player`, `message` | Player sends a chat message |
-| `server_start` | — | Server finishes starting (after Lua reload) |
-| `server_stop` | — | Server is stopping (before save) |
+| Event | Handler args | Fires | Cancellable |
+|-------|-------------|-------|:-----------:|
+| `player_join` | `player` | Player joins the server | ✓ |
+| `player_leave` | `player` | Player disconnects | ✗ |
+| `player_death` | `player`, `damageType` | Player dies (`damageType`: `"fall"`, `"player_attack"`, etc.) | ✗ |
+| `player_chat` | `player`, `message` | Player sends a chat message | ✓ |
+| `server_start` | — | Server finishes starting (after Lua reload) | ✗ |
+| `server_stop` | — | Server is stopping (before save) | ✗ |
 
 - `player` is a Player snapshot object — same shape as `ctx.player` in commands
 - Multiple handlers per event are allowed; errors in one don't affect others

@@ -188,14 +188,14 @@ mc.on("server_stop", function()
 end)
 ```
 
-| Event | Handler args | Fires |
-|-------|-------------|-------|
-| `player_join` | `player` | Player joins the server |
-| `player_leave` | `player` | Player disconnects |
-| `player_death` | `player`, `damageType` | Player dies (`"fall"`, `"player_attack"`, etc.) |
-| `player_chat` | `player`, `message` | Player sends a chat message |
-| `server_start` | — | Server finishes starting (after Lua reload) |
-| `server_stop` | — | Server is stopping (before save) |
+| Event | Handler args | Fires | Cancellable |
+|-------|-------------|-------|:-----------:|
+| `player_join` | `player` | Player joins the server | ✓ |
+| `player_leave` | `player` | Player disconnects | ✗ |
+| `player_death` | `player`, `damageType` | Player dies (`"fall"`, `"player_attack"`, etc.) | ✗ |
+| `player_chat` | `player`, `message` | Player sends a chat message | ✓ |
+| `server_start` | — | Server finishes starting (after Lua reload) | ✗ |
+| `server_stop` | — | Server is stopping (before save) | ✗ |
 
 The `player` parameter is the same Player snapshot object used in command handlers (`ctx.player`). Multiple handlers per event are allowed; an error in one doesn't affect others.
 
