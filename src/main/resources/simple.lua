@@ -27,19 +27,16 @@ function registerSimple(cmd, args, template, range, overlay)
     overlay = overlay == true and simple.defaultOverlay or overlay
 
     local render = format(template)
-    local handler = function(...)
+    local handler = function(ctx, ...)
         local argValues = {...}
-        local argTable = {}
+        local argTable = {p = ctx.player}
         for i, name in ipairs(argNames) do
             argTable[name] = argValues[i]
         end
-        for k, v in pairs(_ENV) do
-            argTable[k] = v
-        end
 
         if range ~= nil and range > 0 then
-            local pos = player.pos
-            mc.broadcastInRange(render(argTable), pos.x, pos.y, pos.z, range, player.world, overlay)
+            local pos = ctx.player.pos
+            mc.broadcastInRange(render(argTable), pos.x, pos.y, pos.z, range, ctx.player.world, overlay)
         else
             mc.broadcast(render(argTable), overlay)
         end
