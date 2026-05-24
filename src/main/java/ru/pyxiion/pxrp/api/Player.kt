@@ -1,6 +1,9 @@
 package ru.pyxiion.pxrp.api
 
 import net.minecraft.command.DefaultPermissions
+import net.minecraft.entity.EquipmentSlot
+import net.minecraft.entity.attribute.EntityAttributes
+import net.minecraft.entity.player.PlayerInventory
 import net.minecraft.item.ItemStack
 import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket
 import net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket
@@ -18,6 +21,7 @@ import net.minecraft.util.Identifier
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.GameMode
 import net.minecraft.world.TeleportTarget
+import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
@@ -46,7 +50,10 @@ class Player(private val entity: ServerPlayerEntity) {
                     "dir" -> CoerceJavaToLua.coerce(Vector.fromMc(e.rotationVector))
                     "bodyDir" -> CoerceJavaToLua.coerce(Vector.fromRotation(e.bodyYaw, 0.0f))
                     "health" -> LuaValue.valueOf(e.health.toDouble())
-                    "maxHealth" -> LuaValue.valueOf(e.maxHealth.toDouble())
+                    "maxHealth" -> {
+                        val attr = e.getAttributeInstance(EntityAttributes.MAX_HEALTH)
+                        LuaValue.valueOf(attr?.value ?: e.maxHealth.toDouble())
+                    }
                     "food" -> LuaValue.valueOf(e.hungerManager.foodLevel)
                     "saturation" -> LuaValue.valueOf(e.hungerManager.saturationLevel.toDouble())
                     "gamemode" -> LuaValue.valueOf(e.interactionManager.gameMode.id)
@@ -62,6 +69,31 @@ class Player(private val entity: ServerPlayerEntity) {
                     "isFlying" -> LuaValue.valueOf(e.abilities.flying)
                     "air" -> LuaValue.valueOf(e.air)
                     "maxAir" -> LuaValue.valueOf(e.maxAir)
+
+                    "head" -> {
+                        val s = e.inventory.getStack(EquipmentSlot.HEAD.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE))
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
+                    "chest" -> {
+                        val s = e.inventory.getStack(EquipmentSlot.CHEST.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE))
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
+                    "legs" -> {
+                        val s = e.inventory.getStack(EquipmentSlot.LEGS.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE))
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
+                    "feet" -> {
+                        val s = e.inventory.getStack(EquipmentSlot.FEET.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE))
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
+                    "mainhand" -> {
+                        val s = e.inventory.getStack(e.inventory.selectedSlot)
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
+                    "offhand" -> {
+                        val s = e.inventory.getStack(PlayerInventory.OFF_HAND_SLOT)
+                        if (s.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(s)
+                    }
                     else -> LuaValue.NIL
                 }
             }
@@ -74,9 +106,35 @@ class Player(private val entity: ServerPlayerEntity) {
                 when (key) {
                     "health" -> e.health = value.tofloat()
                     "food" -> e.hungerManager.foodLevel = value.toint()
+                    "air" -> e.air = value.toint()
+                    "maxHealth" -> {
+                        e.getAttributeInstance(EntityAttributes.MAX_HEALTH)?.let { attr ->
+                            attr.baseValue = value.todouble()
+                            e.health = minOf(e.health, attr.value.toFloat())
+                        }
+                    }
+                    "speed" -> e.getAttributeInstance(EntityAttributes.MOVEMENT_SPEED)?.baseValue = value.todouble()
+                    "armor" -> e.getAttributeInstance(EntityAttributes.ARMOR)?.baseValue = value.todouble()
+                    "armorToughness" -> e.getAttributeInstance(EntityAttributes.ARMOR_TOUGHNESS)?.baseValue = value.todouble()
+                    "attackDamage" -> e.getAttributeInstance(EntityAttributes.ATTACK_DAMAGE)?.baseValue = value.todouble()
+                    "attackSpeed" -> e.getAttributeInstance(EntityAttributes.ATTACK_SPEED)?.baseValue = value.todouble()
+                    "knockbackResistance" -> e.getAttributeInstance(EntityAttributes.KNOCKBACK_RESISTANCE)?.baseValue = value.todouble()
+                    "luck" -> e.getAttributeInstance(EntityAttributes.LUCK)?.baseValue = value.todouble()
+                    "stepHeight" -> e.getAttributeInstance(EntityAttributes.STEP_HEIGHT)?.baseValue = value.todouble()
+                    "blockBreakSpeed" -> e.getAttributeInstance(EntityAttributes.BLOCK_BREAK_SPEED)?.baseValue = value.todouble()
+                    "gravity" -> e.getAttributeInstance(EntityAttributes.GRAVITY)?.baseValue = value.todouble()
+                    "scale" -> e.getAttributeInstance(EntityAttributes.SCALE)?.baseValue = value.todouble()
+                    "safeFallDistance" -> e.getAttributeInstance(EntityAttributes.SAFE_FALL_DISTANCE)?.baseValue = value.todouble()
+                    "flyingSpeed" -> e.getAttributeInstance(EntityAttributes.FLYING_SPEED)?.baseValue = value.todouble()
                     "gamemode" -> {
                         GameMode.byId(value.tojstring())?.let { e.changeGameMode(it) }
                     }
+                    "head" -> setSlot(e, EquipmentSlot.HEAD.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE), value)
+                    "chest" -> setSlot(e, EquipmentSlot.CHEST.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE), value)
+                    "legs" -> setSlot(e, EquipmentSlot.LEGS.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE), value)
+                    "feet" -> setSlot(e, EquipmentSlot.FEET.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE), value)
+                    "mainhand" -> setSlot(e, e.inventory.selectedSlot, value)
+                    "offhand" -> setSlot(e, PlayerInventory.OFF_HAND_SLOT, value)
                     else -> {
                         PxRp.logger.warn(
                             "[PxRP] Попытка записи в read-only свойство '{}' игрока {}",
@@ -103,12 +161,25 @@ class Player(private val entity: ServerPlayerEntity) {
         t.rawset("heal", heal(e))
         t.rawset("playSound", playSound(e))
         t.rawset("give", give(e))
+        t.rawset("setItem", setItem(e))
+        t.rawset("getItem", getItem(e))
         t.rawset("clear", clear(e))
 
         return t
     }
 
     companion object {
+        private fun setSlot(e: ServerPlayerEntity, slot: Int, value: LuaValue) {
+            val stack = if (value.isnil()) {
+                ItemStack.EMPTY
+            } else {
+                ItemStackWrapper.unwrap(value)
+                    ?: throw LuaError("setItem: ожидается ItemStack от mc.createItem")
+            }
+            e.inventory.setStack(slot, stack)
+            e.currentScreenHandler.sendContentUpdates()
+        }
+
         private fun sendMessage(e: ServerPlayerEntity) = object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 e.sendMessage(Text.literal(args.arg(2).checkjstring()))
@@ -208,12 +279,59 @@ class Player(private val entity: ServerPlayerEntity) {
 
         private fun give(e: ServerPlayerEntity) = object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
-                val itemId = args.arg(2).checkjstring()
-                val count = args.arg(3).optint(1)
-                val item = Registries.ITEM.get(Identifier.of(itemId))
-                    ?: throw IllegalArgumentException("Item $itemId not found")
-                e.inventory.offerOrDrop(ItemStack(item, count))
+                val first = args.arg(2)
+                val stack: ItemStack = when {
+                    first.isstring() -> {
+                        val id = first.tojstring()
+                        val count = args.arg(3).optint(1)
+                        val item = Registries.ITEM.get(Identifier.of(id))
+                            ?: throw LuaError("Предмет '$id' не найден")
+                        ItemStack(item, count)
+                    }
+                    first.istable() -> {
+                        ItemStackWrapper.unwrap(first)
+                            ?: throw LuaError("give: ожидается ItemStack от mc.createItem или ID предмета")
+                    }
+                    else -> throw LuaError("give: ожидается строка (ID предмета) или ItemStack от mc.createItem")
+                }
+                e.inventory.offerOrDrop(stack)
                 return LuaValue.NIL
+            }
+        }
+
+        private fun setItem(e: ServerPlayerEntity) = object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val slot = args.arg(2).checkint()
+                val itemVal = args.arg(3)
+
+                val inv = e.inventory
+                if (slot < 0 || slot >= inv.size()) {
+                    throw LuaError("setItem: слот $slot вне диапазона (0-${inv.size() - 1})")
+                }
+
+                val stack = if (itemVal.isnil()) {
+                    ItemStack.EMPTY
+                } else {
+                    ItemStackWrapper.unwrap(itemVal)
+                        ?: throw LuaError("setItem: ожидается ItemStack от mc.createItem")
+                }
+
+                inv.setStack(slot, stack)
+                e.currentScreenHandler.sendContentUpdates()
+                return LuaValue.NIL
+            }
+        }
+
+        private fun getItem(e: ServerPlayerEntity) = object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val slot = args.arg(2).checkint()
+                val inv = e.inventory
+                if (slot < 0 || slot >= inv.size()) {
+                    return LuaValue.NIL
+                }
+                val stack = inv.getStack(slot)
+                if (stack.isEmpty) return LuaValue.NIL
+                return ItemStackWrapper.wrap(stack)
             }
         }
 

@@ -18,6 +18,7 @@
 --   7. New arg types      — int, double, bool, block_pos
 --   8. Choice & optional  — choice=... syntax and [name:type] optional args
 --   9. Player info        — reading aggregate entity data
+--  10. Item & inventory   — kits, hats, rename, repair, invsee
 -- ==========================================================================
 
 
@@ -264,7 +265,7 @@ end
 -- ==========================================================================
 -- Pattern 7: New argument types — int, double, bool, block_pos
 -- ==========================================================================
--- /math <a:int> <op:text> <b:double>  — simple in-game calculator
+-- /math <a:int> <op:word> <b:double>  — simple in-game calculator
 -- /setwarp <name:text> <pos:block_pos> — using block_pos for coordinates
 --
 -- KEY PATTERNS:
@@ -351,6 +352,127 @@ end
 
 
 -- ==========================================================================
+-- Pattern 10: Item & inventory manipulation
+-- ==========================================================================
+-- /kit <name:choice=warrior,archer,miner>  — gives a predefined kit
+-- /hat                                    — puts main-hand item on head
+-- /rename <name:text>                     — renames the item in main hand
+-- /repair                                — removes damage from main-hand item
+-- /cleararmor                            — clears all armor slots
+-- /invsee <target:player>                — shows target's hotbar
+--
+-- KEY PATTERNS:
+--   - mc.createItem builds items with components
+--   - player:getItem(slot) / player:setItem(slot, item) read/write any slot
+--   - player.mainhand / player.offhand / player.head / player.chest / player.legs / player.feet
+--     are property-style shortcuts for the active hotbar slot, offhand, and armor slots
+--   - player:give accepts both string IDs and ItemStack objects
+--   - ItemStack objects must come from mc.createItem; raw strings/ints fail in setItem
+
+local KITS = {
+    warrior = {
+        mc.createItem("minecraft:iron_sword",     { name = "§bWarrior Blade",     unbreakable = true }),
+        mc.createItem("minecraft:shield",          { name = "§bWarrior Shield",   unbreakable = true }),
+        mc.createItem("minecraft:iron_helmet",     { name = "§bWarrior Helm",     unbreakable = true }),
+        mc.createItem("minecraft:iron_chestplate", { name = "§bWarrior Plate",    unbreakable = true }),
+        mc.createItem("minecraft:iron_leggings",   { name = "§bWarrior Greaves",  unbreakable = true }),
+        mc.createItem("minecraft:iron_boots",      { name = "§bWarrior Boots",    unbreakable = true }),
+        mc.createItem("minecraft:cooked_beef", 16),
+    },
+    archer = {
+        mc.createItem("minecraft:bow",              { name = "§aLongbow",         unbreakable = true }),
+        mc.createItem("minecraft:arrow", 64),
+        mc.createItem("minecraft:arrow", 64),
+        mc.createItem("minecraft:leather_helmet",   { name = "§aArcher Cap",      custom_model_data = 1 }),
+        mc.createItem("minecraft:leather_chestplate", { name = "§aArcher Tunic",  custom_model_data = 1 }),
+        mc.createItem("minecraft:golden_boots",     { name = "§aSwift Boots" }),
+    },
+    miner = {
+        mc.createItem("minecraft:iron_pickaxe",     { name = "§7Miner's Pick",    unbreakable = true }),
+        mc.createItem("minecraft:iron_shovel",      { name = "§7Miner's Shovel",  unbreakable = true }),
+        mc.createItem("minecraft:torch", 64),
+        mc.createItem("minecraft:torch", 64),
+        mc.createItem("minecraft:cooked_porkchop", 32),
+    },
+}
+
+function kitHandler(ctx, name)
+    local items = KITS[name]
+    if not items then
+        ctx.player:sendMessage("§cUnknown kit.")
+        return
+    end
+    ctx.player:clear()
+    for _, item in ipairs(items) do
+        ctx.player:give(item)
+    end
+    ctx.player:sendMessage("§aKit §f" .. name .. " §agiven!")
+end
+
+function hatHandler(ctx)
+    local held = ctx.player.mainhand
+    if not held then
+        ctx.player:sendMessage("§cYou must hold an item in your main hand.")
+        return
+    end
+    local helmet = ctx.player.head
+    ctx.player.head = held
+    ctx.player.mainhand = helmet
+    ctx.player:sendMessage("§aNice hat!")
+end
+
+function renameHandler(ctx, name)
+    local held = ctx.player.mainhand
+    if not held then
+        ctx.player:sendMessage("§cYou must hold an item in your main hand.")
+        return
+    end
+    local renamed = mc.createItem(held.id, {
+        count = held.count,
+        name = name,
+    })
+    ctx.player.mainhand = renamed
+    ctx.player:sendMessage("§aItem renamed to §f" .. name)
+end
+
+function repairHandler(ctx)
+    local held = ctx.player.mainhand
+    if not held then
+        ctx.player:sendMessage("§cYou must hold an item in your main hand.")
+        return
+    end
+    local repaired = mc.createItem(held.id, {
+        count = held.count,
+        unbreakable = true,
+    })
+    ctx.player.mainhand = repaired
+    ctx.player:sendMessage("§aItem repaired!")
+end
+
+function cleararmorHandler(ctx)
+    ctx.player.head = nil
+    ctx.player.chest = nil
+    ctx.player.legs = nil
+    ctx.player.feet = nil
+    ctx.player:sendMessage("§aArmor cleared!")
+end
+
+function invseeHandler(ctx, target)
+    local lines = {}
+    for slot = 0, 8 do
+        local item = target:getItem(slot)
+        if item then
+            table.insert(lines, "§7[" .. slot .. "] §f" .. item.id .. " §7x" .. item.count)
+        else
+            table.insert(lines, "§7[" .. slot .. "] §8empty")
+        end
+    end
+    ctx.player:sendMessage("§6--- " .. target.name .. "'s hotbar ---")
+    ctx.player:sendMessage(table.concat(lines, "\n"))
+end
+
+
+-- ==========================================================================
 -- Event integration
 -- ==========================================================================
 -- These handlers react to game events using state set by commands above.
@@ -393,10 +515,18 @@ register("report <msg:text>",                    reportHandler)
 register("whois <target:player>",                whoisHandler)
 
 -- New argument types
-register("math <a:int> <op:text> <b:double>",    mathHandler)
+register("math <a:double> <op:word> <b:double>",    mathHandler)
 register("setwarp <name:text> <pos:block_pos>",  setwarpHandler,           "pxrp.admin")
 
 -- Choice + optional args
 register("gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]", gamemodeHandler, "pxrp.admin")
 register("kick <target:player> [<reason:text>]", kickHandler,              "pxrp.mod")
+
+-- Item & inventory commands
+register("kit <name:choice=warrior,archer,miner>",          kitHandler,       "pxrp.admin")
+register("hat",                                              hatHandler)
+register("rename <name:text>",                               renameHandler)
+register("repair",                                           repairHandler,    "pxrp.admin")
+register("cleararmor",                                       cleararmorHandler)
+register("invsee <target:player>",                           invseeHandler,    "pxrp.mod")
 

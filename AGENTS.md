@@ -2,6 +2,32 @@
 
 Fabric mod (MC 1.21.11) that lets server admins define chat commands via Lua scripts. Kotlin 2.2.21, Fabric Loom 1.16, Yarn, Java 21.
 
+## PxMC Code Design Guidelines
+
+**Mantra: "Complexity must scale with the task, never with the platform."**
+
+### 🎨 Lua API aesthetics (Clean Lua Rule)
+
+**Properties over getters/setters** — expose clean fields via `__index`/`__newindex`, never force method-style access on Lua:
+- Good: `player.helmet = item`, `player.health`
+- Bad: `player:setHelmet(item)`, `player:getHealth()`
+
+**Smart overloads** — minimal args for simple cases, table for complex. Never force empty placeholder arguments:
+- Good: `mc.createItem("apple")`, `mc.createItem("apple", 64)`, `mc.createItem("sword", { name="God Sword", unbreakable=true })`
+- Bad: `mc.createItem("apple", 1, {})` (forcing count + empty table)
+
+### 🛠 Kotlin core responsibilities
+
+**Mutation shield (mandatory cloning)** — Minecraft `ItemStack` references are mutable; sharing causes silent corruption. Any Kotlin method fetching from or injecting into the game must `copy()`. Never leak raw references to Lua.
+
+**Encapsulated client sync** — modifying backend collections does not auto-update the client UI. Kotlin must handle sync internally (e.g. `sendContentUpdates()`). Never expose sync methods to Lua.
+
+**Nil-mapping** — map Lua `nil` to Minecraft safe defaults (`ItemStack.EMPTY`, `null`, etc.). Never crash on `nil` where a default makes sense.
+
+### 🚀 No architectural restrictions
+
+Kotlin's job is to provide high-performance, predictable bindings — not to police what Lua scripts can build. Scripts may range from simple commands to heavy procedural worldgen. Prioritise single-thread performance and non-blocking patterns.
+
 ## Build, test & run
 
 ```
@@ -18,7 +44,7 @@ Fabric mod (MC 1.21.11) that lets server admins define chat commands via Lua scr
 ## Testing
 
 - `src/test/kotlin/ru/pyxiion/pxrp/` — JUnit 5 via `kotlin-test-junit5`. All tests run without Minecraft runtime.
-- 4 test files: `SyntaxParserTest`, `BuildVariantsTest`, `ChoiceTypeTest`, `BrigadierTreeTest` — cover syntax parsing, variant generation, parse-time choice validation, and tree topology (name-based dedup, sibling args, chaining).
+- 3 test files: `SyntaxParserTest`, `BuildVariantsTest`, `BrigadierTreeTest` — cover syntax parsing, variant generation, and tree topology (name-based dedup, sibling args, chaining).
 - `BrigadierTreeTest` reflects `CommandNode.children` field directly — `getChildren()` returns a non-Map type on this classpath. Use `childrenField.get(node) as Map<*, *>`.
 - To add tests: new file in `src/test/kotlin/ru/pyxiion/pxrp/`, use `kotlin.test.Test`, `kotlin.test.assertEquals`, etc.
 
@@ -27,30 +53,35 @@ Fabric mod (MC 1.21.11) that lets server admins define chat commands via Lua scr
 ```
 src/main/java/ru/pyxiion/pxrp/
   PxRp.kt                  # lifecycle + event wiring
-  LuaCmdLoader.kt          # Lua runtime, register() bridge
+  LuaCmdLoader.kt          # Lua runtime, register() bridge, type map
   LuaCommandManager.kt     # dynamic Brigadier tree management
   CommandSyntax.kt         # SyntaxParser, buildVariants, parseSyntaxString, ArgDef, ArgToken — standalone, no Minecraft deps
   LuaEventManager.kt       # mc.on() event bus
   Scheduler.kt             # mc.schedule/mc.scheduleRepeating/mc.cancelTask
   Utils.kt                 # luaTableOf(), checkPermission(), asVarArgFunction()
-  api/                     # Player (Lua-facing), Vector, LuaMcApi
+  api/                     # Player (Lua-facing), Vector, LuaMcApi, ItemStackWrapper
   types/                   # LuaArgumentType, ChoiceArgumentType, toLuaValue()
   storage/                 # DataTable, DataBackend, JsonBackend, StorageManager
   mixins/
     CommandNodeMixin.java  # @Accessor on Brigadier CommandNode fields
     MinecraftServerMixin   # @Inject on reloadResources → luaLoader.reload()
-  coerce/KotlinToLua.kt    # DEAD CODE — entirely commented out
+  coerce/                  # DEAD CODE — entirely commented out
 ```
 
 ## Key conventions
 
 - **Russian error messages** in logs and chat — do not flag as bugs
 - **`Utils.kt` (root)** and **`types/Utils.kt`** are separate files with distinct helpers
-- **`rawset` vs `set` on Player**: After `setmetatable()`, all `LuaTable.set()` goes through `__newindex`. Methods and data writes use `t.rawset(key, value)`. Property writes (`health`, `food`, `gamemode`) route through `__newindex`. Any new key added after `setmetatable` MUST use `rawset`.
+- **`rawset` vs `set` on Player**: After `setmetatable()`, all `LuaTable.set()` goes through `__newindex`. Methods and data writes use `t.rawset(key, value)`. Property writes (`health`, `food`, `air`, `maxHealth`, `speed`, `armor`, `head`, `chest`, `legs`, `feet`, `mainhand`, `offhand`, etc.) route through `__newindex`. Any new key added after `setmetatable` MUST use `rawset`.
+- **ItemStack wrapper**: `ItemStackWrapper` stores `ItemStack` Java objects in LuaTables with a `__pxrp_item` marker key and the stack at `_stack`. `unwrap()` always calls `copy()` to prevent mutation sharing. `mc.createItem` is registered in `LuaCmdLoader` on the `mc` table. `player:setItem/setItem/getItem` in `Player.kt` rely on `ItemStackWrapper` for conversion.
+- **Player armour properties**: `player.head`, `player.chest`, `player.legs`, `player.feet` — read returns wrapped `ItemStack` or `nil`, write accepts `ItemStack` or `nil` (clears slot). Internally uses `EquipmentSlot.XXX.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE)`.
+- **Player hand properties**: `player.mainhand` (active hotbar slot), `player.offhand` (slot 40) — same read/write pattern as armour properties.
 - **Permission propagation**: Parent literal nodes require OR of their children's permissions. If any child has no permission (nil), parent is unrestricted.
-- **`mergeOrBuildArgsFrom` matches by `arg.name`** (not `arg.type`). Two commands under the same literal with different argument names register as separate children. This handles `register("gamemode <mode:choice=a,b> ...")` + `register("gamemode <mode2:choice=c,d> ...")` correctly — `mode` and `mode2` become distinct sibling nodes.
-- **Choice args validate at parse time** — `ChoiceType` is a custom Brigadier `ArgumentType<String>`. Different choice sets are different types (`equals`/`hashCode` based on choices list). This enables Brigadier to disambiguate: `mode:choice=creative,spectator` and `mode2:choice=survival,adventure` reject each other's input at parse time.
+- **Choice args**: `ChoiceArgumentType` implements `LuaArgumentType` (not Brigadier's `ArgumentType`). It builds with `StringArgumentType.word()` and validates choices at runtime in `getArg()` — not at parse time. `SuggestionProvider` provides tab-completions. Different choice sets share the same argument type (Brigadier can't disambiguate them at parse time).
 - **Reserved commands**: `pxrp`, `stop`, `reload`, `op`, `deop`, `ban`, `ban-ip`, `pardon`, `pardon-ip`, `save-all`, `save-on`, `save-off`, `whitelist` — top-level literals blocked in `addCommand()`.
+- **Fresh nodes per variant**: `ArgDef` stores only `luaType` + `isOptional`. `LuaCommandManager.addCommand` creates fresh `ArgumentCommandNode` instances on demand via `argDef.luaType.getBrigadierArgument(name)` rather than sharing global node instances across variants.
+- **Granular path permissions**: Permissions are tracked per-node (including arguments) via `pathPermissions` keys like `"cmd <arg>"`. Literal ancestors accumulate the OR of all child permissions; argument nodes only carry their own variant's permission.
+- **API/ doc sync**: Every time you change the API (add/modify/remove arg types, Lua functions, syntax, events), you **must** update both `AGENTS.md` (agent instructions) and `README.md` (user-facing docs).
 
 ## Register syntax
 
@@ -62,10 +93,10 @@ register("cmd <name:type> [<name:type>]", handler, permission?)
 |------|---------|
 | `cmd` `sub` | Literal path tokens — create Brigadier literal nodes |
 | `<name:type>` | Required argument. Missing `:type` raises a parse error |
-| `[<name:type>]` | Optional trailing argument. Everything from first `[...]` onward is optional. Missing → `nil` in handler. Internally registers N+1 variants |
-| `<name:choice=x,y>` | Choice type — custom Brigadier `ArgumentType<String>`, validates at parse time (rejects invalid values before execution), tab-completes options |
+| `[<name:type>]` or `[name:type]` | Optional trailing argument. Everything from first `[...]` onward is optional. Missing → `nil` in handler. Internally registers N+1 variants |
+| `<name:choice=x,y>` | Choice type — validates at runtime, tab-completes options |
 
-**Types**: `text`, `player` (or `target` alias), `int`, `double`, `float`, `bool`, `block_pos` (returns `{x,y,z}`), `choice=opt1,opt2,...`
+**Types**: `text` (multi-word), `word` (single word, no quotes), `player` (or `target` alias), `int`, `double`, `float`, `bool`, `block_pos` (returns `{x,y,z}`), `choice=opt1,opt2,...`
 
 **Handler**: `function(ctx, arg1, arg2, ...)` — `ctx.player` is a live wrapper (always reads from entity, not snapshot). `ctx.player.data` is a per-player DataTable.
 
@@ -87,7 +118,7 @@ register("cmd <name:type> [<name:type>]", handler, permission?)
 
 ## Block API
 
-`mc.setBlock` / `mc.getBlock` / `mc.fill` — coordinates floored, blockId auto-prefixed with `minecraft:` if no namespace, fill volume capped at 32,768 blocks, flag `0x02` (no neighbor updates for fill), `setBlockState` loads chunks on demand.
+`mc.setBlock` / `mc.getBlock` / `mc.fill` — coordinates floored, blockId auto-prefixed with `minecraft:` if no namespace. `setBlock` uses flag `0x03` (notify clients + update neighbors). `fill` uses `0x02` (notify neighbors only, no block updates) and volume capped at 32,768 blocks. `setBlockState` loads chunks on demand.
 
 ## Lua environment
 
