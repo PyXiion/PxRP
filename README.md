@@ -3,7 +3,7 @@
 > [!NOTE]
 > Beware that this project is also coded by AI. Humans included too.
 
-![version](https://img.shields.io/badge/version-0.2.2-blue)
+x![version](https://img.shields.io/badge/version-0.3.0-blue)
 
 A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define custom chat commands using Lua scripts — no Java or Kotlin mod code required.
 
@@ -13,10 +13,10 @@ A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define
 - **Event system** — React to player joins, leaves, deaths, chat messages, and server lifecycle with Lua handlers.
 - **Dynamic reload** — `/pxrp reload` re-executes all Lua scripts without restarting the server.
 - **Built-in argument types** — `text` (free-form message) and `target` (player selector with tab completion).
-- **Minecraft API exposed to Lua** — particles, sounds, global and range-limited broadcasting.
+- **Minecraft API exposed to Lua** — particles, sounds, global and range-limited broadcasting, scheduling (delayed and repeating tasks), block manipulation (set/get/fill).
 - **Persistent data storage** — Key-value data per player (`ctx.player.data`) and globally (`mc.data`), auto-persisted to JSON.
 - **Permission system** — Uses the Fabric Permissions API (supports both OP-based and permissions-plugin-based systems).
-- **Player context** — Command handlers receive the sender's name, position, direction, and world.
+- **Player context** — Command handlers receive the sender as a full Player object with readable properties (health, position, inventory, gamemode, etc.) and callable methods (`sendMessage`, `teleport`, `kick`, `playSound`, `give`).
 - **Lua libraries** — Bundled `format.lua` (f-string-like templating) and `simple.lua` (concise command registration).
 
 ## Requirements
@@ -29,7 +29,7 @@ A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define
 ## Quick start
 
 1. Install the mod on your Fabric server.
-2. On first run, `config/pxrp.lua` is created with example commands.
+2. On first run, `config/pxrp/demo.lua` is created with example scripts.
 3. Run `/pxrp reload` (requires operator level 4 or `pyxiion.pxrp` permission) to apply changes.
 
 ## Examples
@@ -117,7 +117,7 @@ require "format"    -- provides format() and broadcastFormat()
 require "simple"    -- provides registerSimple()
 ```
 
-Include these at the top of your `pxrp.lua` (or any script) to use them.
+Include these at the top of any script in `config/pxrp/` to use them.
 
 #### `format.lua` — template engine
 
@@ -197,7 +197,7 @@ end)
 | `server_start` | — | Server finishes starting (after Lua reload) | ✗ |
 | `server_stop` | — | Server is stopping (before save) | ✗ |
 
-The `player` parameter is the same Player snapshot object used in command handlers (`ctx.player`). Multiple handlers per event are allowed; an error in one doesn't affect others.
+The `player` parameter is the same Player object used in command handlers (`ctx.player`). Multiple handlers per event are allowed; an error in one doesn't affect others.
 
 ### Cancelling events
 
@@ -247,14 +247,45 @@ See the complete [Lua 5.1 Reference Manual](https://www.lua.org/manual/5.1/) for
 
 ## Lua API
 
-### `register(path, arguments, handler, permission?)`
+### `register(syntax, handler, permission?)`
 
-Registers a Brigadier command.
+Registers a Brigadier command. The syntax string combines the command path and argument definitions in a single string.
 
-- `path` — Command path string, e.g. `"rp kill"`.
-- `arguments` — Table of argument types, e.g. `{"target", "text"}`. Use `name:type` syntax for custom names (e.g. `"action:text"`), otherwise names are auto-generated.
-- `handler` — Lua function called when the command executes. The first argument is always a Context object (`ctx`); subsequent arguments are the parsed command arguments.
+- `syntax` — Command syntax, e.g. `"msg <target:player> <msg:text>"`. Literal tokens form the path, `<name:type>` tokens define typed arguments. Missing `:type` on an angle-bracket token raises an error. Optional trailing args: `[<name:type>]` (everything from the first `[...]` onward is optional; missing options are `nil` in the handler). Subcommands use literal tokens: `"admin mute <target:player>"`.
+- `handler` — Lua function called when the command executes. The first argument is always a Context object (`ctx`); subsequent arguments are the parsed command arguments in order.
 - `permission` — Optional permission node string.
+
+Supported argument types:
+
+| Type | Lua value | Minecraft source |
+|------|-----------|-----------------|
+| `text` | string | Free-form message (trailing text) |
+| `player` / `target` | Player object | Player selector (must target exactly one player) |
+| `int` | number | Integer value |
+| `double` | number | Double-precision decimal |
+| `float` | number | Single-precision decimal |
+| `bool` | boolean | Boolean (`true`/`false`) |
+| `block_pos` | table `{x, y, z}` | Block position (x y z coordinates) |
+| `choice=a,b,c` | string | One of the comma-separated options (tab-completes, validates at runtime) |
+
+Reserved commands — the following top-level command names cannot be overridden via `register()` (an error is thrown at registration time):
+`pxrp`, `stop`, `reload`, `op`, `deop`, `ban`, `ban-ip`, `pardon`, `pardon-ip`, `save-all`, `save-on`, `save-off`, `whitelist`. These are critical server management commands that must not be shadowed.
+
+Optional arguments — everything from the first `[<name:type>]` onward is optional. Internally registers N+1 Brigadier variants so the handler is called without the optional arg(s). Missing params become `nil` in Lua.
+
+Examples:
+```lua
+register("msg <target:player> <msg:text>",   handler)
+register("mute <target:player>",             handler, "pxrp.mod")
+register("setblocks <pos:block_pos> <block:text>", handler, "pxrp.admin")
+register("homelist",                           handler)
+
+-- Choice type — tab suggestions + validation
+register("gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]", handler, "pxrp.admin")
+
+-- Optional args — reason is nil when omitted
+register("kick <target:player> [<reason:text>]", handler, "pxrp.mod")
+```
 
 ### Context object
 
@@ -266,18 +297,61 @@ Every command handler receives a **Context** object as its first argument. The c
 
 ### Player object
 
-The player object is accessed via `ctx.player` inside a command handler:
+The Player object is accessed via `ctx.player` inside a command handler (or as the first arg in events like `player_join`). It's a live wrapper around the Minecraft player — every property read fetches the current state from the entity.
 
-| Field | Type | Description |
-|---|---|---|
-| `ctx.player.name` | `string` | Player display name |
-| `ctx.player.pos` | `{x, y, z}` | Position vector |
-| `ctx.player.dir` | `{x, y, z}` | Look direction vector |
-| `ctx.player.bodyDir` | `{x, y, z}` | Body yaw direction vector |
-| `ctx.player.world` | `string` | World key (e.g. `minecraft:overworld`) |
-| `ctx.player.data` | `table` | Persistent key-value storage |
+#### Properties
 
-### `ctx.player.data` — Persistent per-player storage
+| Property | Type | Settable | Description |
+|----------|------|:--------:|-------------|
+| `name` | string | ✗ | Player name |
+| `uuid` | string | ✗ | UUID string |
+| `world` | string | ✗ | World path (e.g. `"overworld"`) |
+| `pos` | `{x, y, z}` | ✗ | Position |
+| `dir` | `{x, y, z}` | ✗ | Look direction |
+| `bodyDir` | `{x, z}` | ✗ | Body yaw direction |
+| `health` | number | ✓ | Current health |
+| `maxHealth` | number | ✗ | Max health |
+| `food` | number | ✓ | Food level |
+| `saturation` | number | ✗ | Saturation |
+| `gamemode` | string | ✓ | Gamemode (`"survival"`, `"creative"`, etc.) |
+| `ping` | number | ✗ | Latency (ms) |
+| `xpLevel` | number | ✗ | Experience level |
+| `xpProgress` | number | ✗ | XP progress (0–1) |
+| `isOp` | boolean | ✗ | Operator status |
+| `displayName` | string | ✗ | Display name |
+| `isSneaking` | boolean | ✗ | Sneaking state |
+| `isSprinting` | boolean | ✗ | Sprinting state |
+| `selectedSlot` | number | ✗ | Hotbar slot |
+| `fallDistance` | number | ✗ | Fall distance |
+| `isFlying` | boolean | ✗ | Flying state |
+| `air` | number | ✗ | Air ticks |
+| `maxAir` | number | ✗ | Max air ticks |
+
+Setting a read-only property logs a warning and does nothing.
+
+#### Methods
+
+Methods are called with `:` syntax:
+
+```lua
+ctx.player:sendMessage("Hello!")
+ctx.player:teleport(100, 64, 200)
+```
+
+| Method | Args | Description |
+|--------|------|-------------|
+| `sendMessage` | text | Sends a chat message |
+| `sendActionBar` | text | Action bar overlay |
+| `sendTitle` | title, [subtitle=nil] | Title + optional subtitle |
+| `kick` | [reason="Kicked"] | Disconnects the player |
+| `teleport` | x, y, z, [worldName=nil] | Teleport (intra-world or cross-dimension) |
+| `damage` | amount | Deal generic damage |
+| `heal` | amount | Heal health |
+| `playSound` | id, [volume=1], [pitch=1] | Play a sound to the player |
+| `give` | itemId, [count=1] | Give an item |
+| `clear` | — | Clear inventory |
+
+#### Per-player persistent storage (`ctx.player.data`)
 
 A Lua table that persists to disk (<config>/pxrp/storage/players/<uuid>.json). Data is written to disk when:
 - The server stops
@@ -335,6 +409,72 @@ if mc.time() - last < 10 then
     return
 end
 ctx.player.data.lastFart = mc.time()
+```
+
+### `mc.schedule(delay, callback)`
+
+Runs a Lua function once after `delay` ticks (20 ticks = 1 second). Returns a task ID that can be used with `mc.cancelTask`.
+
+```lua
+mc.schedule(40, function()
+    mc.broadcast("§e2 seconds have passed!")
+end)
+```
+
+### `mc.scheduleRepeating(delay, interval, callback)`
+
+Runs a Lua function repeatedly. The first execution happens after `delay` ticks, then every `interval` ticks after that. Returns a task ID.
+
+```lua
+local id = mc.scheduleRepeating(0, 20, function()
+    local time = mc.data.gameTime or 0
+    time = time + 1
+    mc.data.gameTime = time
+    mc.broadcast("§e" .. time .. " second(s) have passed!")
+end)
+```
+
+### `mc.cancelTask(id)`
+
+Cancels a previously scheduled task by its ID. Returns `true` if the task was found and cancelled, `false` otherwise.
+
+```lua
+local id = mc.schedule(100, function()
+    mc.broadcast("This will never run!")
+end)
+mc.cancelTask(id)
+```
+
+- All tasks are automatically cancelled on `/pxrp reload` and server stop.
+- Callback errors are caught and logged per-task without affecting other tasks.
+- **Important**: callbacks run on the server tick thread — do not perform blocking operations.
+
+### `mc.setBlock(x, y, z, blockId, world)`
+
+Places a block at the given position. `blockId` defaults to `minecraft:` namespace if omitted — `"stone"` is equivalent to `"minecraft:stone"`. Triggers full neighbor updates (redstone, water flow, observers), same as placing a block manually.
+
+```lua
+mc.setBlock(0, 64, 0, "diamond_block", "minecraft:overworld")
+```
+
+### `mc.getBlock(x, y, z, world)` → string
+
+Returns the registry ID of the block at the given position, e.g. `"minecraft:stone"` or `"minecraft:air"`.
+
+```lua
+local block = mc.getBlock(0, 4, 0, "minecraft:overworld")
+if block == "minecraft:air" then
+    mc.broadcast("The floor was broken!")
+end
+```
+
+### `mc.fill(x1, y1, z1, x2, y2, z2, blockId, world)`
+
+Fills a cuboid region. No neighbor updates are sent — blocks appear instantly to clients without causing observer/redstone cascades. Volume capped at 32,768 blocks (≈ 32×32×32). Unloaded chunks are loaded on demand, same as vanilla `/fill`.
+
+```lua
+-- Reset an arena floor
+mc.fill(-10, 4, -10, 10, 4, 10, "glass", "minecraft:overworld")
 ```
 
 ### `mc.on(event, handler)`

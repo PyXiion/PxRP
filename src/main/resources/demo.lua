@@ -15,7 +15,9 @@
 --   4. Mute / moderation  — command + event integration
 --   5. Global config      — data-driven runtime settings
 --   6. Report cooldown    — per-player throttle + notifications
---   7. Player info        — reading aggregate entity data
+--   7. New arg types      — int, double, bool, block_pos
+--   8. Choice & optional  — choice=... syntax and [name:type] optional args
+--   9. Player info        — reading aggregate entity data
 -- ==========================================================================
 
 
@@ -260,7 +262,69 @@ end
 
 
 -- ==========================================================================
--- Pattern 7: Player info — reading aggregate entity data
+-- Pattern 7: New argument types — int, double, bool, block_pos
+-- ==========================================================================
+-- /math <a:int> <op:text> <b:double>  — simple in-game calculator
+-- /setwarp <name:text> <pos:block_pos> — using block_pos for coordinates
+--
+-- KEY PATTERNS:
+--   - int, double, float produce native Lua numbers
+--   - bool produces a Lua boolean (true/false)
+--   - block_pos returns {x, y, z} — works like stored position tables
+
+function mathHandler(ctx, a, op, b)
+    local result
+    if op == "+" then
+        result = a + b
+    elseif op == "-" then
+        result = a - b
+    elseif op == "*" then
+        result = a * b
+    elseif op == "/" then
+        if b == 0 then return ctx.player:sendMessage("§cCannot divide by zero!") end
+        result = a / b
+    else
+        ctx.player:sendMessage("§cUnknown operator. Use +, -, *, /")
+        return
+    end
+    ctx.player:sendMessage("§aResult: §f" .. string.format("%.2f", result))
+end
+
+function setwarpHandler(ctx, name, pos)
+    local warps = mc.data.warps or {}
+    warps[name] = { x = pos.x, y = pos.y, z = pos.z }
+    mc.data.warps = warps
+    ctx.player:sendMessage("§aWarp §f'" .. name .. "' §aset at " .. pos.x .. ", " .. pos.y .. ", " .. pos.z)
+end
+
+
+-- ==========================================================================
+-- Pattern 8: Choice type + optional arguments
+-- ==========================================================================
+-- /gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]
+-- /kick <target:player> [<reason:text>]
+--
+-- KEY PATTERNS:
+--   - choice type shows tab completions and validates at runtime
+--   - [name:type] defines an optional trailing argument (nil when omitted)
+--   - Optional args generate multiple Brigadier trees automatically
+--   - The handler just checks "if reason then ... end" — Lua passes nil
+
+function gamemodeHandler(ctx, mode, target)
+    local p = target or ctx.player
+    local old = p.gamemode
+    p.gamemode = mode
+    ctx.player:sendMessage("§aSet " .. p.name .. "'s gamemode from §f" .. old .. " §ato §f" .. mode)
+end
+
+function kickHandler(ctx, target, reason)
+    target:kick(reason or "Kicked by staff")
+    ctx.player:sendMessage("§aKicked §f" .. target.name)
+end
+
+
+-- ==========================================================================
+-- Pattern 9: Player info — reading aggregate entity data
 -- ==========================================================================
 -- /whois <player>   — show detailed info about a player
 --
@@ -314,19 +378,27 @@ end)
 -- Command registrations
 -- ==========================================================================
 
-register("msg",      {"target", "msg:text"},            msgHandler)
-register("sethome",  {"name:text"},                     sethomeHandler)
-register("home",     {"name:text"},                     homeHandler)
-register("homelist", {},                                homelistHandler)
-register("tpa",      {"target"},                        tpaHandler)
-register("tpaccept", {"target"},                        tpacceptHandler)
-register("tpdeny",   {"target"},                        tpdenyHandler)
-register("mute",     {"target"},                        muteHandler,              "pxrp.mod")
-register("unmute",   {"target"},                        unmuteHandler,            "pxrp.mod")
-register("setwelcome", {"msg:text"},                    setwelcomeHandler,        "pxrp.admin")
-register("setspawn", {},                                setspawnHandler,          "pxrp.admin")
-register("report",   {"msg:text"},                      reportHandler)
-register("whois",    {"target"},                        whoisHandler)
+register("msg <target:player> <msg:text>",       msgHandler)
+register("sethome <name:text>",                  sethomeHandler)
+register("home <name:text>",                     homeHandler)
+register("homelist",                             homelistHandler)
+register("tpa <target:player>",                  tpaHandler)
+register("tpaccept <sender:player>",             tpacceptHandler)
+register("tpdeny <sender:player>",               tpdenyHandler)
+register("mute <target:player>",                 muteHandler,              "pxrp.mod")
+register("unmute <target:player>",               unmuteHandler,            "pxrp.mod")
+register("setwelcome <msg:text>",                setwelcomeHandler,        "pxrp.admin")
+register("setspawn",                             setspawnHandler,          "pxrp.admin")
+register("report <msg:text>",                    reportHandler)
+register("whois <target:player>",                whoisHandler)
+
+-- New argument types
+register("math <a:int> <op:text> <b:double>",    mathHandler)
+register("setwarp <name:text> <pos:block_pos>",  setwarpHandler,           "pxrp.admin")
+
+-- Choice + optional args
+register("gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]", gamemodeHandler, "pxrp.admin")
+register("kick <target:player> [<reason:text>]", kickHandler,              "pxrp.mod")
 
 return {
     msg      = msgHandler,
@@ -342,4 +414,8 @@ return {
     setspawn = setspawnHandler,
     report   = reportHandler,
     whois    = whoisHandler,
+    math     = mathHandler,
+    setwarp  = setwarpHandler,
+    gamemode = gamemodeHandler,
+    kick     = kickHandler,
 }

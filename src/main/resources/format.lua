@@ -65,3 +65,5 @@ function broadcastFormat(template)
         mc.broadcast(format(template)(args))
     end
 end
+
+return { format = format, broadcastFormat = broadcastFormat }

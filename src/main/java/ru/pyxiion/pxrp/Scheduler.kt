@@ -3,56 +3,63 @@ package ru.pyxiion.pxrp
 import org.luaj.vm2.LuaFunction
 import org.luaj.vm2.LuaValue
 import ru.pyxiion.pxrp.PxRp.Companion.logger
+import java.util.PriorityQueue
 
 class Scheduler {
     private var nextId = 0
-    private val tasks = mutableListOf<ScheduledTask>()
+    private var currentTick = 0L
+    private val tasks = PriorityQueue(compareBy<ScheduledTask> { it.fireAtTick })
+    private val cancelledIds = HashSet<Int>()
 
     fun tick() {
-        if (tasks.isEmpty()) return
-        val iterator = tasks.listIterator()
-        while (iterator.hasNext()) {
-            val task = iterator.next()
-            task.remaining--
-            if (task.remaining <= 0) {
-                try {
-                    task.callback.invoke()
-                } catch (e: Throwable) {
-                    logger.warn("Ошибка в задании планировщика #${task.id}: ${e.message}")
-                }
-                if (task.repeating) {
-                    task.remaining = task.interval
-                } else {
-                    iterator.remove()
-                }
+        currentTick++
+        while (tasks.isNotEmpty() && tasks.peek().fireAtTick <= currentTick) {
+            val task = tasks.poll()
+            if (task.id in cancelledIds) {
+                cancelledIds.remove(task.id)
+                continue
+            }
+            try {
+                task.callback.invoke()
+            } catch (e: Throwable) {
+                logger.warn("Ошибка в задании планировщика #${task.id}: ${e.message}")
+            }
+            if (task.repeating && task.interval > 0) {
+                tasks.offer(task.copy(fireAtTick = currentTick + task.interval))
             }
         }
     }
 
     fun schedule(delay: Int, callback: LuaFunction): Int {
         val id = nextId++
-        tasks.add(ScheduledTask(id, delay.coerceAtLeast(0), 0, false, callback))
+        tasks.offer(ScheduledTask(id, currentTick + delay.coerceAtLeast(0), 0, false, callback))
         return id
     }
 
     fun scheduleRepeating(delay: Int, interval: Int, callback: LuaFunction): Int {
         val id = nextId++
-        tasks.add(ScheduledTask(id, delay.coerceAtLeast(0), interval.coerceAtLeast(0), true, callback))
+        tasks.offer(
+            ScheduledTask(id, currentTick + delay.coerceAtLeast(0), interval.coerceAtLeast(0), true, callback)
+        )
         return id
     }
 
     fun cancel(id: Int): Boolean {
-        return tasks.removeAll { it.id == id }
+        if (id >= nextId) return false
+        if (id in cancelledIds) return false
+        cancelledIds.add(id)
+        return true
     }
 
     fun clear() {
         tasks.clear()
+        cancelledIds.clear()
     }
 }
 
 data class ScheduledTask(
     val id: Int,
-    var remaining: Int,
+    val fireAtTick: Long,
     val interval: Int,
     val repeating: Boolean,
     val callback: LuaFunction

@@ -28,8 +28,17 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build
-        run: ./gradlew build
+      - name: Build (includes tests via check lifecycle)
+        run: ./gradlew build --no-daemon
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

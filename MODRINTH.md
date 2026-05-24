@@ -22,7 +22,7 @@
 ## Quick start
 
 1. Install on your Fabric server
-2. On first run, `config/pxrp.lua` is created with example commands
+2. On first run, `config/pxrp/demo.lua` is created with example scripts
 3. Run `/pxrp reload` (requires op level 4 or `pyxiion.pxrp` permission) to apply changes
 
 ## Examples

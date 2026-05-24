@@ -1,9 +1,14 @@
 package ru.pyxiion.pxrp
 
+import com.mojang.brigadier.arguments.BoolArgumentType
+import com.mojang.brigadier.arguments.DoubleArgumentType
+import com.mojang.brigadier.arguments.FloatArgumentType
+import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.context.CommandContext
 import com.mojang.brigadier.exceptions.CommandSyntaxException
 import com.mojang.brigadier.tree.ArgumentCommandNode
 import net.fabricmc.loader.api.FabricLoader
+import net.minecraft.command.argument.BlockPosArgumentType
 import net.minecraft.command.argument.EntityArgumentType
 import net.minecraft.command.argument.MessageArgumentType
 import net.minecraft.server.MinecraftServer
@@ -19,17 +24,12 @@ import org.luaj.vm2.lib.jse.JseMathLib
 import ru.pyxiion.pxrp.PxRp.Companion.logger
 import ru.pyxiion.pxrp.api.LuaMcApi
 import ru.pyxiion.pxrp.api.Player
-import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.storage.StorageManager
+import ru.pyxiion.pxrp.types.ChoiceArgumentType
 import ru.pyxiion.pxrp.types.LuaArgumentType
+import ru.pyxiion.pxrp.types.toLuaValue
 import java.io.FileOutputStream
 import kotlin.io.path.exists
-
-// Represents a parsed Lua command argument with its name and argument type identifier (e.g. "text", "target")
-data class LuaCommandArgument(
-    val name: String,
-    val type: String
-)
 
 // Loads and manages Lua-based commands from the config/pxrp/ directory.
 // Bridges Lua script functions with Minecraft's Brigadier command system.
@@ -52,6 +52,15 @@ class LuaCmdLoader(
                 return CommandManager.argument(name, MessageArgumentType.message()).build()
             }
         },
+        "player" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return Player(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, EntityArgumentType.player()).build()
+            }
+        },
         "target" to object : LuaArgumentType {
             override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
                 return Player(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
@@ -59,6 +68,52 @@ class LuaCmdLoader(
 
             override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
                 return CommandManager.argument(name, EntityArgumentType.player()).build()
+            }
+        },
+        "int" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return IntegerArgumentType.getInteger(ctx, name)
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, IntegerArgumentType.integer()).build()
+            }
+        },
+        "double" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return DoubleArgumentType.getDouble(ctx, name)
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, DoubleArgumentType.doubleArg()).build()
+            }
+        },
+        "float" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return FloatArgumentType.getFloat(ctx, name)
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, FloatArgumentType.floatArg()).build()
+            }
+        },
+        "bool" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                return BoolArgumentType.getBool(ctx, name)
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, BoolArgumentType.bool()).build()
+            }
+        },
+        "block_pos" to object : LuaArgumentType {
+            override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
+                val pos = BlockPosArgumentType.getBlockPos(ctx, name)
+                return luaTableOf("x" to LuaValue.valueOf(pos.x), "y" to LuaValue.valueOf(pos.y), "z" to LuaValue.valueOf(pos.z))
+            }
+
+            override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
+                return CommandManager.argument(name, BlockPosArgumentType.blockPos()).build()
             }
         }
     )
@@ -159,24 +214,32 @@ class LuaCmdLoader(
     }
 
 
-    // Called from Lua as `register(command, arguments, handler, permission)`.
-    // Parses the argument definitions, builds a Brigadier executor that dispatches
-    // to the Lua handler function, and registers the command with the command manager
+    // Called from Lua as `register("command <arg:type> ...", handler, permission?)`.
+    // Parses the syntax string with a minimal character-by-character parser.
+    // Supports:
+    //   <name:type>       — required argument
+    //   [name:type]       — optional argument (trailing only)
+    //   <name:type=opts>  — parameterized type (e.g. choice=a,b,c)
+    //   literal           — command path node
+    // Optional trailing arguments generate multiple Brigadier command variants —
+    // missing optional args become nil in the Lua handler.
+    // Parameterized types (type=options) resolve to dynamic LuaArgumentType instances.
     private fun register(args: Varargs): Varargs {
-        require(args.narg() in 3..4) { "register(command, arguments, handler, permission = nil) requires 3..4 arguments" }
-        val commandName = args.arg(1).checkjstring()
-        val arguments = args.arg(2).checkstringlist()
-        val handler = args.arg(3)
-        val permission: String? = args.arg(4).optjstring(null)
+        require(args.narg() in 2..3) { "register(syntax, handler, permission = nil) requires 2..3 arguments" }
+        val syntax = args.arg(1).checkjstring()
+        val handler = args.arg(2)
+        val permission: String? = args.arg(3).optjstring(null)
 
         require(handler.isfunction()) { "Command handler must be a function" }
 
-        val parsedArgs = parseArgs(arguments)
+        val (commandParts, argDefs) = parseSyntax(syntax)
+        val variants = buildVariants(argDefs)
+        val function = handler.checkfunction()
 
-        val executor =
-            fun(ctx: CommandContext<ServerCommandSource>): Int {
+        for (variant in variants) {
+            val executor = fun(ctx: CommandContext<ServerCommandSource>): Int {
                 try {
-                    executeLuaCommand(ctx, parsedArgs, handler.checkfunction())
+                    executeLuaCommand(ctx, variant, function)
                     return 1
                 } catch (e: CommandSyntaxException) {
                     throw e
@@ -189,62 +252,62 @@ class LuaCmdLoader(
                 }
                 return 0
             }
-
-        commandManager!!.addCommand(commandName, parsedArgs.map { it.second }, executor, permission)
+            commandManager!!.addCommand(commandParts.joinToString(" "), variant.map { it.node }, executor, permission)
+        }
 
         return NIL
     }
 
-    // Parses Lua argument type strings (e.g. "target" or "msg:text") into pairs of
-    // [typeName, BrigadierArgumentNode]. Auto-generates unique names for unnamed arguments
-    private fun parseArgs(args: List<String>): List<Pair<String, ArgumentCommandNode<ServerCommandSource, *>>> {
-        val result = mutableListOf<Pair<String, ArgumentCommandNode<ServerCommandSource, *>>>()
-        val usedNames = mutableMapOf<String, Int>()
-
-        for (arg in args) {
-            if (arg.contains(':')) {
-                val (name, type) = arg.split(':')
-                require(argumentTypes.containsKey(type)) { "Unknown argument type '$type'" }
-                result.add(Pair(type, argumentTypes[type]!!.getBrigadierArgument(name)))
-            } else {
-                require(argumentTypes.containsKey(arg)) { "Unknown argument type '$arg'" }
-                val name = "$arg${usedNames.getOrPut(arg) { 0 } + 1}"
-                usedNames[arg] = usedNames[arg]!!.plus(1)
-                result.add(Pair(arg, argumentTypes[arg]!!.getBrigadierArgument(name)))
-            }
+    private fun parseSyntax(syntax: String): Pair<List<String>, List<ArgDef>> {
+        val (commandParts, argTokens) = parseSyntaxString(syntax)
+        val argDefs = argTokens.map { token ->
+            val luaType = resolveType(token.typeDef)
+            ArgDef(
+                luaType = luaType,
+                node = luaType.getBrigadierArgument(token.name),
+                isOptional = token.isOptional
+            )
         }
-
-        return result
+        return Pair(commandParts, argDefs)
     }
 
-    private fun prepareLuaArgAndContext(ctx: CommandContext<ServerCommandSource>, argsInfo: List<Pair<String, ArgumentCommandNode<ServerCommandSource, *>>>): Array<LuaValue> {
-        val args = argsInfo.map { LuaCommandArgument(it.second.name, it.first) }
+    private fun resolveType(typeDef: String): LuaArgumentType {
+        val eqIdx = typeDef.indexOf('=')
+        if (eqIdx == -1) {
+            require(argumentTypes.containsKey(typeDef)) { "Unknown argument type '$typeDef'" }
+            return argumentTypes[typeDef]!!
+        }
 
+        val baseType = typeDef.substring(0, eqIdx)
+        val params = typeDef.substring(eqIdx + 1)
+
+        return when (baseType) {
+            "choice" -> {
+                val choices = params.split(",").map { it.trim() }
+                ChoiceArgumentType(choices)
+            }
+            else -> throw IllegalArgumentException("Unknown argument type '$baseType' with parameters")
+        }
+    }
+
+    private fun prepareLuaArgAndContext(ctx: CommandContext<ServerCommandSource>, argDefs: List<ArgDef>): Array<LuaValue> {
         val player = Player(ctx.source.playerOrThrow).toLuaValue()
         val ctxTable = luaTableOf("player" to player)
 
         val result = mutableListOf<LuaValue>()
         result.add(ctxTable)
-        for (a in args) {
-            val arg = argumentTypes[a.type]!!.getArg(ctx, a.name)
-            result.add(
-                when (arg) {
-                    is LuaValue -> arg
-                    is String -> LuaValue.valueOf(arg)
-                    else -> throw IllegalArgumentException(
-                        "Unsupported argument type: ${arg::class.simpleName ?: arg.javaClass.name}"
-                    )
-                }
-            )
+        for (def in argDefs) {
+            val arg = def.luaType.getArg(ctx, def.node.name)
+            result.add(toLuaValue(arg))
         }
         return result.toTypedArray()
     }
 
-    // Invokes the Lua handler function with the prepared context and arguments,
-    // then clears temporary global state (`player` and `currentContext`)
-    private fun executeLuaCommand(ctx: CommandContext<ServerCommandSource>, argsInfo: List<Pair<String, ArgumentCommandNode<ServerCommandSource, *>>>, function: LuaFunction) {
+    // Invokes the Lua handler function with the prepared context and resolved arguments.
+    // Missing optional arguments are simply not passed — Lua sees nil for those params.
+    private fun executeLuaCommand(ctx: CommandContext<ServerCommandSource>, argDefs: List<ArgDef>, function: LuaFunction) {
         try {
-            val luaArgs = prepareLuaArgAndContext(ctx, argsInfo)
+            val luaArgs = prepareLuaArgAndContext(ctx, argDefs)
             function.invoke(luaArgs)
         } catch (e: LuaError) {
             throw e

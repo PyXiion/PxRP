@@ -2,26 +2,10 @@ simple = {
     defaultOverlay = 20 * 7
 }
 
-function registerSimple(cmd, args, template, range, overlay)
+function registerSimple(syntax, template, range, overlay)
     local argNames = {}
-    local typeCounts = {}
-
-    for i, arg in ipairs(args) do
-        local name, typ
-        -- Разбираем аргумент на имя и тип
-        if arg:find(":") then
-            name, typ = arg:match("([^:]+):([^:]+)")
-        else
-            typ = arg
-            -- Генерируем имя на основе типа
-            typeCounts[typ] = (typeCounts[typ] or 0) + 1
-            if typeCounts[typ] > 1 then
-                name = typ .. tostring(typeCounts[typ] - 1)
-            else
-                name = typ
-            end
-        end
-        table.insert(argNames, name)
+    for arg in syntax:gmatch("<([^:>]+):[^>]+>") do
+        table.insert(argNames, arg)
     end
 
     overlay = overlay == true and simple.defaultOverlay or overlay
@@ -42,6 +26,7 @@ function registerSimple(cmd, args, template, range, overlay)
         end
     end
 
-    -- Регистрируем команду
-    register(cmd, args, handler)
+    register(syntax, handler)
 end
+
+return { registerSimple = registerSimple, simple = simple }

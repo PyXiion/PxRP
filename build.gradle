@@ -61,6 +61,13 @@ dependencies {
     shadow ("me.lucko:fabric-permissions-api:0.6.1") {
         transitive = false
     }
+
+    testImplementation "org.jetbrains.kotlin:kotlin-test-junit5:$kotlin_version"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
 }
 
 shadowJar {
