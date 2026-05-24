@@ -1,33 +1,32 @@
 # PxRP
 
-**Lua-scriptable roleplay command framework for Minecraft Fabric servers.** Define custom chat commands using Lua scripts — no Java or Kotlin mod code required.
+**Lua-scriptable roleplay command framework for Minecraft Fabric servers.** Define custom chat commands and server logic using Lua scripts — no Java or Kotlin mod code required.
+
+[⚙️ GitHub & Documentation](https://github.com/PyXiion/PxRP)
 
 ## Features
 
-- **Lua-driven commands** — Write `.lua` files to register Brigadier commands with tab completion, argument parsing, and permission checks
-- **Event system** — React to player joins, leaves, deaths, chat messages, and server lifecycle with Lua handlers
-- **Dynamic reload** — `/pxrp reload` (or F3+T) re-executes all Lua scripts without restarting the server
-- **Minecraft API exposed to Lua** — particles, sounds, broadcasting, time
-- **Persistent data storage** — Key-value data per player and globally, auto-persisted to JSON
-- **Permission system** — Uses Fabric Permissions API (OP-based and plugin-based)
-- **Bundled Lua libs** — `format.lua` (f-string templating) and `simple.lua` (concise registration)
+- **Lua-driven commands** — Write `.lua` files to register Brigadier commands with tab completion, argument parsing, optional args, and permission checks.
+- **Event system** — React to player joins, leaves, deaths, chat messages, and server lifecycle with Lua handlers (join/chat events are cancellable).
+- **Dynamic reload** — Use `/pxrp reload` to instantly re-execute all Lua scripts without restarting the server.
+- **Rich argument types** — Supports `player`/`target`, `text`, `int`, `double`, `float`, `bool`, `block_pos`, and `choice=a,b,c` with parse-time validation and tab completion.
+- **Minecraft API exposed to Lua** — Trigger particles, sounds, broadcasting (global and range-limited), block manipulation (set/get/fill), and server time control.
+- **Scheduler** — Built-in `mc.schedule()` and `mc.scheduleRepeating()` for delayed or repeating tasks measured in ticks.
+- **Persistent storage** — Per-player (`ctx.player.data`) and global (`mc.data`) key-value data automatically persisted to JSON.
+- **Full Player API** — Live entity wrapper with readable properties (pos, health, food, gamemode, ping, xp, etc.) and methods (sendMessage, teleport, kick, playSound, give, damage, heal, clear).
+- **Permission system** — Integrates seamlessly with the Fabric Permissions API (works with LuckPerms, OP-based systems, etc.).
+- **Reserved command protection** — 13 critical server commands cannot be accidentally shadowed or broken by scripts.
 
-## Requirements
+## Quick Start
 
-- Minecraft 1.21.x
-- Fabric Loader ≥0.19.2
-- Fabric API ≥0.141.4
-- Fabric Language Kotlin ≥1.10.8
-
-## Quick start
-
-1. Install on your Fabric server
-2. On first run, `config/pxrp/demo.lua` is created with example scripts
-3. Run `/pxrp reload` (requires op level 4 or `pyxiion.pxrp` permission) to apply changes
+1. Install PxRP on your Fabric server along with its dependencies.
+2. On the first run, a `config/pxrp/demo.lua` file will be created with example scripts.
+3. Edit the scripts and run `/pxrp reload` (requires OP level 4 or `pyxiion.pxrp` permission) to apply changes!
 
 ## Examples
 
-### Command
+### Creating a Command
+
 ```lua
 register("fart", {}, function(ctx)
     local player = ctx.player
@@ -38,7 +37,8 @@ register("fart", {}, function(ctx)
 end)
 ```
 
-### Event
+### Event handling
+
 ```lua
 mc.on("player_join", function(player)
     mc.broadcast("Welcome, " .. player.name .. "!")
@@ -49,8 +49,14 @@ mc.on("player_death", function(player, damageType)
 end)
 ```
 
-See the [full documentation on GitHub](https://github.com/PyXiion/PxRP) for the complete API reference and more examples.
+### Arguments & permissions
+```lua
+register("gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]", function(ctx, mode, target)
+    local p = target or ctx.player
+    p.gamemode = mode
+    mc.broadcast(p.name .. " is now in " .. mode .. " mode")
+end, "pxrp.admin")
+```
 
 ## License
-
-GNU Lesser General Public License v3.0.
+This project is licensed under the GNU Lesser General Public License v3.0.
