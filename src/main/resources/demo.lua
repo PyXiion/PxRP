@@ -400,22 +400,3 @@ register("setwarp <name:text> <pos:block_pos>",  setwarpHandler,           "pxrp
 register("gamemode <mode:choice=creative,survival,adventure,spectator> [<target:player>]", gamemodeHandler, "pxrp.admin")
 register("kick <target:player> [<reason:text>]", kickHandler,              "pxrp.mod")
 
-return {
-    msg      = msgHandler,
-    sethome  = sethomeHandler,
-    home     = homeHandler,
-    homelist = homelistHandler,
-    tpa      = tpaHandler,
-    tpaccept = tpacceptHandler,
-    tpdeny   = tpdenyHandler,
-    mute     = muteHandler,
-    unmute   = unmuteHandler,
-    setwelcome = setwelcomeHandler,
-    setspawn = setspawnHandler,
-    report   = reportHandler,
-    whois    = whoisHandler,
-    math     = mathHandler,
-    setwarp  = setwarpHandler,
-    gamemode = gamemodeHandler,
-    kick     = kickHandler,
-}

@@ -28,5 +28,3 @@ function registerSimple(syntax, template, range, overlay)
 
     register(syntax, handler)
 end
-
-return { registerSimple = registerSimple, simple = simple }
