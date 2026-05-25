@@ -2,6 +2,9 @@ package ru.pyxiion.pxrp.api
 
 import net.minecraft.util.math.MathHelper
 import net.minecraft.util.math.Vec3d
+import org.luaj.vm2.LuaTable
+import org.luaj.vm2.LuaValue
+import ru.pyxiion.pxrp.luaTableOf
 
 data class Vector(
     @JvmField
@@ -11,6 +14,14 @@ data class Vector(
     @JvmField
     val z: Double,
 ) {
+    fun toLuaValue(): LuaValue {
+        return luaTableOf(
+            "x" to LuaValue.valueOf(x),
+            "y" to LuaValue.valueOf(y),
+            "z" to LuaValue.valueOf(z),
+        )
+    }
+
     companion object {
         fun fromMc(vec: Vec3d): Vector {
             return Vector(vec.x, vec.y, vec.z)

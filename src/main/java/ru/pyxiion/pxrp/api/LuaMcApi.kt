@@ -1,10 +1,7 @@
 package ru.pyxiion.pxrp.api
 
-import net.minecraft.nbt.NbtCompound
-import net.minecraft.nbt.NbtOps
 import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket
 import net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket
-import net.minecraft.particle.ParticleEffect
 import net.minecraft.registry.Registries
 import net.minecraft.registry.Registry
 import net.minecraft.registry.RegistryKey
@@ -24,34 +21,20 @@ import ru.pyxiion.pxrp.Scheduler
 import ru.pyxiion.pxrp.asVarArgFunction
 import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.storage.StorageManager
+import java.util.UUID
 
 class LuaMcApi(
     private val server: MinecraftServer,
     private val storage: StorageManager
 ) {
     val scheduler = Scheduler()
+    private val playerCache = mutableMapOf<UUID, LuaValue>()
+
+    fun invalidatePlayer(uuid: UUID) {
+        playerCache.remove(uuid)
+    }
     private fun <T> getRegistryKey(registryType: RegistryKey<Registry<T>>, key: String): RegistryKey<T> {
         return RegistryKey.of(registryType, Identifier.of(key))
-    }
-
-    private fun requireParticle(arg: LuaValue): ParticleEffect {
-        val id = arg.checkjstring()
-        val registryKey = getRegistryKey(RegistryKeys.PARTICLE_TYPE, id)
-        val particleType = Registries.PARTICLE_TYPE.get(registryKey)
-        check(particleType != null) { "Failed to get particle $id. Particle type not found." }
-
-        if (particleType is ParticleEffect) {
-            return particleType
-        }
-
-        return try {
-            particleType.codec.codec().parse(server.registryManager.getOps(NbtOps.INSTANCE), NbtCompound()).orThrow
-        } catch (e: IllegalStateException) {
-            throw IllegalArgumentException(
-                "Particle '$id' requires additional parameters and cannot be used with mc.particle(). " +
-                        "Use simple particles like minecraft:gust or minecraft:campfire_cosmoke instead."
-            )
-        }
     }
 
     private fun requireWorld(arg: LuaValue): ServerWorld {
@@ -71,17 +54,6 @@ class LuaMcApi(
             ?: throw IllegalArgumentException("Sound $key not found")
     }
 
-
-    private fun particle(args: Varargs) {
-        require(args.narg() == 5) { "particle(particle, x, y, z, world) requires 5 arguments" }
-        val particle = requireParticle(args.arg(1))
-        val (x, y, z) = (2..4).map { args.arg(it).checkdouble() }
-        val world = requireWorld(args.arg(5))
-
-        server.playerManager.playerList.forEach {
-            world.spawnParticles(it, particle, true, false, x, y, z, 1, 0.0, 0.0, 0.0, 0.0)
-        }
-    }
 
     private fun playSound(args: Varargs) {
         require(args.narg() in 5..7) { "playSound(sound, x, y, z, world, volume = 1, pitch[0-2] = 1) requires 5..7 arguments" }
@@ -140,16 +112,6 @@ class LuaMcApi(
         doBroadcast(text, null, null, null, overlay)
     }
 
-    private fun broadcastInRange(args: Varargs) {
-        require(args.narg() in 6..7) { "broadcastInRange(text, x, y, z, range, world, overlay = false) requires 6..7 arguments" }
-        val text = args.arg(1).checkjstring()
-        val (x, y, z, range) = (2..5).map { args.arg(it).checkdouble() }
-        val world = requireWorldKey(args.arg(6))
-        val overlay = if (args.arg(7).isint()) args.arg(7).toint() else null
-
-        doBroadcast(text, Vec3d(x, y, z), world, range, overlay)
-    }
-
     private fun luaSchedule(args: Varargs): Varargs {
         require(args.narg() == 2) { "schedule(delay, callback) requires 2 arguments" }
         val delay = args.arg(1).checkint()
@@ -174,26 +136,34 @@ class LuaMcApi(
         return LuaValue.valueOf(removed)
     }
 
+    private fun luaGetPlayers(args: Varargs): Varargs {
+        val list = LuaTable()
+        server.playerManager.playerList.forEachIndexed { i, p ->
+            list.set(i + 1, playerCache.getOrPut(p.uuid) { Player(p).toLuaValue() })
+        }
+        return list
+    }
+
     private fun luaGetWorld(args: Varargs): Varargs {
         val name = args.arg(1).checkjstring()
         val key = RegistryKey.of(RegistryKeys.WORLD, Identifier.of(name))
         val world = server.getWorld(key)
             ?: throw IllegalArgumentException("World '$name' not found")
-        return World(world).toLuaValue()
+        return World(world, playerCache).toLuaValue()
     }
 
     fun toTable(): LuaTable {
         return luaTableOf(
-            "particle" to this::particle.asVarArgFunction(),
             "broadcast" to this::broadcast.asVarArgFunction(),
             "playSound" to this::playSound.asVarArgFunction(),
-            "broadcastInRange" to this::broadcastInRange.asVarArgFunction(),
             "data" to storage.getGlobalData(),
             "time" to this::luaTime.asVarArgFunction(),
             "schedule" to this::luaSchedule.asVarArgFunction(),
             "scheduleRepeating" to this::luaScheduleRepeating.asVarArgFunction(),
             "cancelTask" to this::luaCancelTask.asVarArgFunction(),
             "world" to this::luaGetWorld.asVarArgFunction(),
+            "players" to this::luaGetPlayers.asVarArgFunction(),
+            "onlineCount" to LuaValue.valueOf(server.playerManager.currentPlayerCount.toDouble()),
         )
     }
 }

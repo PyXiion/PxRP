@@ -14,12 +14,13 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
-import org.luaj.vm2.lib.jse.CoerceJavaToLua
 import ru.pyxiion.pxrp.toBlockPos
 import ru.pyxiion.pxrp.toVec3d
 
 class EntityWrapper(private val entity: Entity) {
     private val living: LivingEntity? = entity as? LivingEntity
+
+    private val posProxy by lazy { livePosTable(entity) }
 
     private val attributeAccessors = mapOf(
         "speed" to EntityAttributes.MOVEMENT_SPEED,
@@ -65,9 +66,9 @@ class EntityWrapper(private val entity: Entity) {
                         if (cn != null) LuaValue.valueOf(cn.string) else LuaValue.NIL
                     }
                     "world" -> World(e.entityWorld as ServerWorld).toLuaValue()
-                    "pos" -> CoerceJavaToLua.coerce(Vector.fromMc(e.entityPos))
-                    "dir" -> CoerceJavaToLua.coerce(Vector.fromMc(e.rotationVector))
-                    "bodyDir" -> CoerceJavaToLua.coerce(Vector.fromRotation(e.bodyYaw, 0.0f))
+                    "pos" -> posProxy
+                    "dir" -> Vector.fromMc(e.rotationVector).toLuaValue()
+                    "bodyDir" -> Vector.fromRotation(e.bodyYaw, 0.0f).toLuaValue()
                     "fallDistance" -> LuaValue.valueOf(e.fallDistance.toDouble())
                     "fireTicks" -> LuaValue.valueOf(e.fireTicks)
                     "glowing" -> LuaValue.valueOf(e.isGlowing)
@@ -195,5 +196,37 @@ class EntityWrapper(private val entity: Entity) {
         val table = LuaTable()
         table.setmetatable(meta)
         return table
+    }
+
+    private fun livePosTable(e: Entity): LuaValue {
+        val meta = LuaTable()
+        meta.set("__index", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val field = args.arg(2).tojstring()
+                val v = e.entityPos
+                return when (field) {
+                    "x" -> LuaValue.valueOf(v.x)
+                    "y" -> LuaValue.valueOf(v.y)
+                    "z" -> LuaValue.valueOf(v.z)
+                    else -> LuaValue.NIL
+                }
+            }
+        })
+        meta.set("__newindex", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val field = args.arg(2).tojstring()
+                val value = args.arg(3).todouble()
+                val v = e.entityPos
+                e.setPosition(
+                    if (field == "x") value else v.x,
+                    if (field == "y") value else v.y,
+                    if (field == "z") value else v.z,
+                )
+                return LuaValue.NIL
+            }
+        })
+        val t = LuaTable()
+        t.setmetatable(meta)
+        return t
     }
 }

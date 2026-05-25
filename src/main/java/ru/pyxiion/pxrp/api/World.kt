@@ -3,6 +3,11 @@ package ru.pyxiion.pxrp.api
 import net.minecraft.entity.LivingEntity
 import net.minecraft.entity.SpawnReason
 import net.minecraft.entity.attribute.EntityAttributes
+import net.minecraft.nbt.NbtCompound
+import net.minecraft.nbt.NbtOps
+import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket
+import net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket
+import net.minecraft.particle.ParticleEffect
 import net.minecraft.registry.Registries
 import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
@@ -10,6 +15,7 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
 import net.minecraft.util.Identifier
 import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.Vec3d
 import net.minecraft.world.World as McWorld
 import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaTable
@@ -19,8 +25,9 @@ import org.luaj.vm2.lib.VarArgFunction
 import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.toBlockPos
 import ru.pyxiion.pxrp.toVec3d
+import java.util.UUID
 
-class World(private val world: ServerWorld) {
+class World(private val world: ServerWorld, private val playerCache: Map<UUID, LuaValue>? = null) {
 
     fun toLuaValue(): LuaValue {
         val w = world
@@ -34,6 +41,18 @@ class World(private val world: ServerWorld) {
                     "time" -> LuaValue.valueOf(w.timeOfDay.toDouble())
                     "raining" -> if (w.isRaining) LuaValue.TRUE else LuaValue.FALSE
                     "thundering" -> if (w.isThundering) LuaValue.TRUE else LuaValue.FALSE
+                    "players" -> {
+                        val t = LuaTable()
+                        w.players.forEachIndexed { i, p ->
+                            val cached = playerCache?.get(p.uuid)
+                            if (cached != null) {
+                                t.set(i + 1, cached)
+                            } else {
+                                t.set(i + 1, Player(p).toLuaValue())
+                            }
+                        }
+                        t
+                    }
                     else -> LuaValue.NIL
                 }
             }
@@ -71,6 +90,8 @@ class World(private val world: ServerWorld) {
         t.rawset("setBlock", setBlock(w))
         t.rawset("getBlock", getBlock(w))
         t.rawset("fill", fill(w))
+        t.rawset("particle", particle(w))
+        t.rawset("broadcastInRange", broadcastInRange(w))
 
         return t
     }
@@ -170,6 +191,64 @@ class World(private val world: ServerWorld) {
                 val state = block.defaultState
                 for (pos in BlockPos.iterate(BlockPos(minX, minY, minZ), BlockPos(maxX, maxY, maxZ))) {
                     w.setBlockState(pos, state, 0x02)
+                }
+                return LuaValue.NIL
+            }
+        }
+
+        private fun particle(w: ServerWorld) = object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val id = args.arg(2).checkjstring()
+                val x = args.arg(3).checkdouble()
+                val y = args.arg(4).checkdouble()
+                val z = args.arg(5).checkdouble()
+
+                val key = RegistryKey.of(RegistryKeys.PARTICLE_TYPE, Identifier.of(id))
+                val particleType = Registries.PARTICLE_TYPE.get(key)
+                    ?: throw LuaError("Частица '$id' не найдена")
+
+                val effect: ParticleEffect = if (particleType is ParticleEffect) {
+                    particleType
+                } else {
+                    try {
+                        particleType.codec.codec().parse(w.registryManager.getOps(NbtOps.INSTANCE), NbtCompound()).orThrow
+                    } catch (e: IllegalStateException) {
+                        throw LuaError("Частица '$id' требует дополнительных параметров")
+                    }
+                }
+
+                w.players.forEach { player ->
+                    w.spawnParticles(player, effect, true, false, x, y, z, 1, 0.0, 0.0, 0.0, 0.0)
+                }
+                return LuaValue.NIL
+            }
+        }
+
+        private fun broadcastInRange(w: ServerWorld) = object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val text = args.arg(2).checkjstring()
+                val x = args.arg(3).checkdouble()
+                val y = args.arg(4).checkdouble()
+                val z = args.arg(5).checkdouble()
+                val range = args.arg(6).checkdouble()
+                val overlay = if (args.narg() >= 7 && args.arg(7).isint()) args.arg(7).toint() else null
+
+                val rangeSquare = range * range
+                val pos = Vec3d(x, y, z)
+
+                val players = w.players.filter { it.squaredDistanceTo(pos) < rangeSquare }
+
+                if (overlay == null) {
+                    players.forEach { it.sendMessage(Text.literal(text)) }
+                } else {
+                    val timing = TitleFadeS2CPacket(20, overlay, 20)
+                    val title = OverlayMessageS2CPacket(Text.literal(text))
+                    players.forEach {
+                        with(it.networkHandler) {
+                            sendPacket(timing)
+                            sendPacket(title)
+                        }
+                    }
                 }
                 return LuaValue.NIL
             }
