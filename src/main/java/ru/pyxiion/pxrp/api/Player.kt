@@ -51,6 +51,7 @@ class Player(private val entity: ServerPlayerEntity) {
                     "isOp" -> LuaValue.valueOf(e.getPermissions().hasPermission(DefaultPermissions.GAMEMASTERS))
                     "selectedSlot" -> LuaValue.valueOf(e.inventory.selectedSlot)
                     "isFlying" -> LuaValue.valueOf(e.abilities.flying)
+                    "sidebar" -> sidebarProxy(e)
                     else -> entityValue.get(key)
                 }
             }
@@ -71,6 +72,23 @@ class Player(private val entity: ServerPlayerEntity) {
                     "feet" -> setSlot(e, EquipmentSlot.FEET.getOffsetEntitySlotId(PlayerInventory.MAIN_SIZE), value)
                     "mainhand" -> setSlot(e, e.inventory.selectedSlot, value)
                     "offhand" -> setSlot(e, PlayerInventory.OFF_HAND_SLOT, value)
+                    "sidebar" -> {
+                        val manager = PxRp.instance.luaLoader.personalSidebarManager
+                        if (value.isnil()) {
+                            manager.clearSidebar(e)
+                        } else if (value.istable()) {
+                            val t = value.checktable()
+                            val title = t.get("title").optjstring(null)
+                            val lines = mutableListOf<String>()
+                            var i = 1
+                            while (true) {
+                                val v = t.rawget(i++)
+                                if (v.isnil()) break
+                                if (v.isstring()) lines.add(v.tojstring())
+                            }
+                            manager.setSidebar(e, lines, title)
+                        }
+                    }
                     else -> entityValue.set(key, value)
                 }
                 return LuaValue.NIL
@@ -271,6 +289,59 @@ class Player(private val entity: ServerPlayerEntity) {
                 e.inventory.clear()
                 return LuaValue.NIL
             }
+        }
+
+        private fun sidebarProxy(e: ServerPlayerEntity): LuaValue {
+            val meta = LuaTable()
+            meta.set("__index", object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val key = args.arg(2).tojstring()
+                    val manager = PxRp.instance.luaLoader.personalSidebarManager
+                    val data = manager.getSidebar(e) ?: return LuaValue.NIL
+                    return when (key) {
+                        "title" -> LuaValue.valueOf(data.title)
+                        "lines" -> {
+                            val t = LuaTable()
+                            for ((i, line) in data.lines.withIndex()) {
+                                t.rawset(i + 1, LuaValue.valueOf(line))
+                            }
+                            t
+                        }
+                        else -> LuaValue.NIL
+                    }
+                }
+            })
+            meta.set("__newindex", object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val key = args.arg(2).tojstring()
+                    val value = args.arg(3)
+                    val manager = PxRp.instance.luaLoader.personalSidebarManager
+                    when (key) {
+                        "title" -> {
+                            if (value.isstring()) {
+                                manager.setSidebarTitle(e, value.tojstring())
+                            }
+                        }
+                        "lines" -> {
+                            if (value.istable()) {
+                                val lines = mutableListOf<String>()
+                                val t = value.checktable()
+                                var i = 1
+                                while (true) {
+                                    val v = t.rawget(i++)
+                                    if (v.isnil()) break
+                                    if (v.isstring()) lines.add(v.tojstring())
+                                }
+                                manager.setSidebarLines(e, lines)
+                            }
+                        }
+                    }
+                    return LuaValue.NIL
+                }
+            })
+            val t = LuaTable()
+            t.setmetatable(meta)
+            return t
         }
     }
 }

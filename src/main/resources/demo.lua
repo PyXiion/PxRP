@@ -19,7 +19,8 @@
 --   8. Choice & optional  — choice=... syntax and [name:type] optional args
 --   9. Player info        — reading aggregate entity data
 --  10. Item & inventory   — kits, hats, rename, repair, invsee
---  11. World & entity     — spawn, tags, time, weather
+--  11. World & entity     — spawn, tags, time, weather, particle, broadcastInRange
+--  12. Scheduler          — mc.schedule, mc.scheduleRepeating, mc.cancelTask
 -- ==========================================================================
 
 
@@ -480,6 +481,7 @@ end
 -- /tagself <tag:text>                    — add a command tag to yourself
 -- /worldinfo                             — show world time, weather, name
 -- /settime <time:choice=day,night,noon,midnight> — change world time
+-- /yell <msg:text>                       — broadcast within 50 blocks
 --
 -- KEY PATTERNS:
 --   - player.world returns a World wrapper (name, time, raining, thundering)
@@ -487,6 +489,7 @@ end
 --   - Spawned entities have full property access (health, type, uuid, tags, equipment)
 --   - entity.tags is a boolean proxy table backed by command tags
 --   - Setting equipment on spawned entities uses equipStack internally
+--   - world:particle(id, x, y, z) spawns particles visible to all players in that world
 
 function spawnmobHandler(ctx, entityId)
     local player = ctx.player
@@ -564,6 +567,194 @@ function settimeHandler(ctx, period)
     ctx.player:sendMessage("§aTime set to §f" .. period .. "§a.")
 end
 
+function yellHandler(ctx, msg)
+    local player = ctx.player
+    local pos = player.pos
+    player.world:broadcastInRange(msg, pos.x, pos.y, pos.z, 50)
+    player:sendMessage("§aYelled within 50 blocks.")
+end
+
+
+-- ==========================================================================
+-- Pattern 12: Scheduler — delayed and repeating tasks
+-- ==========================================================================
+-- ==========================================================================
+-- /boom <target:player>          — target explodes after 5 seconds
+-- /countdown <seconds:int>       — starts a visible countdown (repeating)
+-- /cancelcountdown               — cancels an active countdown
+--
+-- KEY PATTERNS:
+--   - mc.schedule(delay, callback) fires a function once after delay ticks
+--   - mc.scheduleRepeating(delay, interval, callback) fires repeatedly
+--   - mc.cancelTask(id) stops a pending or repeating task
+--   - Always capture the task id and check it before cancel
+--   - 20 ticks = 1 second
+--   - Callbacks are closures — they capture variables at creation time
+
+local countdowns = {}
+
+function boomHandler(ctx, target)
+    local sender = ctx.player
+    sender:sendMessage("§7Fuse lit on §f" .. target.name .. "§7...")
+    target:sendMessage("§cYou have 5 seconds to run!")
+
+    mc.schedule(100, function()
+        target.world:spawn("minecraft:creeper", target.pos, {})
+        target:sendMessage("§c§kBOOM§r §cYou exploded!")
+        sender:sendMessage("§a" .. target.name .. " went boom!")
+    end)
+end
+
+function countdownHandler(ctx, seconds)
+    local player = ctx.player
+
+    -- Cancel any existing countdown for this player
+    local oldId = countdowns[player.name]
+    if oldId then
+        mc.cancelTask(oldId)
+        countdowns[player.name] = nil
+    end
+
+    local remaining = seconds
+
+    -- Initial message
+    player:sendMessage("§6Countdown: §f" .. remaining .. "§6s")
+
+    local id
+    id = mc.scheduleRepeating(20, 20, function()
+        remaining = remaining - 1
+        if remaining <= 0 then
+            player:sendMessage("§a§lGO!")
+            mc.cancelTask(id)
+            countdowns[player.name] = nil
+        else
+            player:sendMessage("§6Countdown: §f" .. remaining .. "§6s")
+        end
+    end)
+
+    countdowns[player.name] = id
+    player:sendMessage("§7Task ID: §f" .. id)
+end
+
+function cancelcountdownHandler(ctx)
+    local player = ctx.player
+    local id = countdowns[player.name]
+
+    if not id then
+        player:sendMessage("§cYou have no active countdown.")
+        return
+    end
+
+    if mc.cancelTask(id) then
+        countdowns[player.name] = nil
+        player:sendMessage("§aCountdown cancelled.")
+    else
+        player:sendMessage("§cCountdown already expired.")
+        countdowns[player.name] = nil
+    end
+end
+
+
+-- ==========================================================================
+-- Pattern 13: Personal sidebar — per-player scoreboard display
+-- ==========================================================================
+-- /sidebar              — toggle personal info sidebar on/off
+-- /sidebarset <title:text> [<line1:text>] [<line2:text>] [<line3:text>]
+--                       — set a custom sidebar with up to 3 lines
+--
+-- KEY PATTERNS:
+--   - player.sidebar = { title = "...", lines = { ... } } sets a per-player
+--     sidebar visible only to that player
+--   - player.sidebar.title and player.sidebar.lines read/write individual
+--     fields without recreating the whole sidebar
+--   - player.sidebar = nil clears the sidebar
+--   - The sidebar persists across world changes and reconnects
+--   - ⚠ Setting player.sidebar.lines = { "a", "b" } replaces ALL lines
+
+local sidebarEnabled = {}
+
+function sidebarHandler(ctx)
+    local player = ctx.player
+
+    if sidebarEnabled[player.name] then
+        sidebarEnabled[player.name] = nil
+        player.sidebar = nil
+        player:sendMessage("§aSidebar §cdisabled")
+        return
+    end
+
+    sidebarEnabled[player.name] = true
+    player.sidebar = {
+        title = "§6§l" .. player.name,
+        lines = {
+            "§7━━━━━━━━━━━━━━",
+            "§eHP  §f" .. string.format("%.1f", player.health) .. "§7/§f" .. string.format("%.0f", player.maxHealth),
+            "§eFood §f" .. player.food,
+            "§eLvl  §f" .. player.xpLevel,
+            "§ePing §f" .. player.ping .. "ms",
+            "§7━━━━━━━━━━━━━━",
+        },
+    }
+
+    -- Update HP/Food every 2 seconds while enabled
+    local id
+    id = mc.scheduleRepeating(40, 40, function()
+        if not sidebarEnabled[player.name] then
+            mc.cancelTask(id)
+            return
+        end
+
+        local sidebar = player.sidebar
+        if sidebar then
+            sidebar.title = "§6§l" .. player.name
+            sidebar.lines = {
+                "§7━━━━━━━━━━━━━━",
+                "§eHP  §f" .. string.format("%.1f", player.health) .. "§7/§f" .. string.format("%.0f", player.maxHealth),
+                "§eFood §f" .. player.food,
+                "§eLvl  §f" .. player.xpLevel,
+                "§ePing §f" .. player.ping .. "ms",
+                "§7━━━━━━━━━━━━━━",
+            }
+        end
+    end)
+
+    player:sendMessage("§aSidebar §eenabled§a!")
+end
+
+function sidebarsetHandler(ctx, title, line1, line2, line3)
+    local player = ctx.player
+    local lines = { "§7━━━━━━━━━━━━━━" }
+
+    if line1 then table.insert(lines, line1) end
+    if line2 then table.insert(lines, line2) end
+    if line3 then table.insert(lines, line3) end
+
+    table.insert(lines, "§7━━━━━━━━━━━━━━")
+
+    player.sidebar = { title = title, lines = lines }
+    player:sendMessage("§aCustom sidebar set!")
+end
+
+-- Show a welcome sidebar when a player joins
+mc.on("player_join", function(player)
+    player.sidebar = {
+        title = "§a§lWelcome!",
+        lines = {
+            "§7━ §e" .. player.name .. " §7━",
+            "",
+            "§e/server §7info",
+            "§e/help   §7commands",
+        },
+    }
+
+    -- Clear after 10 seconds
+    mc.schedule(200, function()
+        if player.sidebar then
+            player.sidebar = nil
+        end
+    end)
+end)
+
 
 -- ==========================================================================
 -- Event integration
@@ -628,4 +819,14 @@ register("spawnmob <entity:text>",                                          spaw
 register("tagself <tag:text>",                                               tagselfHandler)
 register("worldinfo",                                                        worldinfoHandler)
 register("settime <time:choice=day,night,noon,midnight>",                   settimeHandler,   "pxrp.admin")
+register("yell <msg:text>",                                                  yellHandler)
+
+-- Scheduler
+register("boom <target:player>",       boomHandler,      "pxrp.admin")
+register("countdown <seconds:int>",    countdownHandler)
+register("cancelcountdown",            cancelcountdownHandler)
+
+-- Personal sidebar
+register("sidebar",                                     sidebarHandler)
+register("sidebarset <title:text> [<line1:text>] [<line2:text>] [<line3:text>]", sidebarsetHandler)
 

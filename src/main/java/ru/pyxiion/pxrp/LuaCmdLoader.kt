@@ -25,6 +25,7 @@ import org.luaj.vm2.lib.jse.JseMathLib
 import ru.pyxiion.pxrp.PxRp.Companion.logger
 import ru.pyxiion.pxrp.api.ItemStackWrapper
 import ru.pyxiion.pxrp.api.LuaMcApi
+import ru.pyxiion.pxrp.api.PersonalSidebarManager
 import ru.pyxiion.pxrp.api.Player
 import ru.pyxiion.pxrp.storage.StorageManager
 import ru.pyxiion.pxrp.types.ChoiceArgumentType
@@ -133,13 +134,16 @@ class LuaCmdLoader(
     private var commandManager: LuaCommandManager? = null
 
     // Provides the Minecraft API table exposed to Lua scripts
-    private val api = LuaMcApi(server, storageManager)
+    val api = LuaMcApi(server, storageManager)
 
     // Manages Lua event handlers registered via mc.on()
     val eventManager = LuaEventManager()
 
     // Task scheduler for mc.schedule / mc.scheduleRepeating
     val scheduler: Scheduler get() = api.scheduler
+
+    // Manages per-player personal sidebars
+    val personalSidebarManager = PersonalSidebarManager(server)
 
     // Sets up the Lua globals environment: installs standard libraries and registers
     // the `register` function and `mc` API table for Lua scripts

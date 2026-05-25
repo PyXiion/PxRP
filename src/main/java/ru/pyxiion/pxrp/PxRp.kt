@@ -13,6 +13,7 @@ import net.minecraft.command.permission.PermissionLevel
 import net.minecraft.server.command.CommandManager
 import net.minecraft.text.Text
 import org.luaj.vm2.LuaError
+import org.luaj.vm2.LuaFunction
 import org.luaj.vm2.LuaValue
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -68,14 +69,26 @@ class PxRp : ModInitializer {
                     handler.disconnect(Text.literal("You are not allowed to join this server"))
                 }
             }
+            // Restore personal sidebar after initial scoreboard sync
+            if (::luaLoader.isInitialized) {
+                val player = handler.player
+                luaLoader.scheduler.schedule(2, object : LuaFunction() {
+                    override fun call(): LuaValue {
+                        luaLoader.personalSidebarManager.restoreForPlayer(player)
+                        return LuaValue.NIL
+                    }
+                })
+            }
         })
 
         ServerPlayConnectionEvents.DISCONNECT.register(fun(handler, server) {
+            luaLoader.api.invalidatePlayer(handler.player.uuid)
             if (storageManager != null) {
                 val luaPlayer = Player(handler.player).toLuaValue()
                 luaLoader.eventManager.fire("player_leave", luaPlayer)
             }
             storageManager?.removePlayerData(handler.player.uuid.toString())
+            luaLoader.personalSidebarManager.removeForPlayer(handler.player)
         })
 
         ServerLivingEntityEvents.AFTER_DEATH.register(fun(entity, source) {
