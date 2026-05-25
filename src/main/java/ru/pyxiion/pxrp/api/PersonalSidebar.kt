@@ -73,6 +73,12 @@ class PersonalSidebarManager(private val server: MinecraftServer) {
     private fun sendCreatePackets(player: ServerPlayerEntity, data: PersonalSidebarData) {
         val objective = makeObjective(data.objectiveName, data.title)
 
+        // Remove first to avoid "already exists" errors if the objective is already on the client
+        // (e.g. from a previous sendCreatePackets, race with restoreForPlayer, etc.)
+        player.networkHandler.sendPacket(
+            ScoreboardObjectiveUpdateS2CPacket(objective, ScoreboardObjectiveUpdateS2CPacket.REMOVE_MODE)
+        )
+
         player.networkHandler.sendPacket(
             ScoreboardObjectiveUpdateS2CPacket(objective, ScoreboardObjectiveUpdateS2CPacket.ADD_MODE)
         )
