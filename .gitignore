@@ -6,3 +6,6 @@ run/**
 .luarc.json
 .classpath
 bin/**
+.project
+.settings/
+logs/
