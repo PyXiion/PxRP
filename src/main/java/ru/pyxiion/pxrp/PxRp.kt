@@ -28,8 +28,9 @@ import net.fabricmc.fabric.api.event.player.UseItemCallback
 import net.minecraft.util.Hand
 import ru.pyxiion.pxrp.api.EntityWrapper
 import ru.pyxiion.pxrp.api.ItemStackWrapper
-import ru.pyxiion.pxrp.api.Player
+import ru.pyxiion.pxrp.api.PlayerWrapper
 import ru.pyxiion.pxrp.api.Vector
+import ru.pyxiion.pxrp.api.ContainerManager
 import ru.pyxiion.pxrp.storage.JsonBackend
 import ru.pyxiion.pxrp.storage.StorageManager
 
@@ -75,7 +76,7 @@ class PxRp : ModInitializer {
 
         ServerPlayConnectionEvents.INIT.register(fun(handler, server) {
             if (storageManager != null) {
-                val luaPlayer = Player(handler.player).toLuaValue()
+                val luaPlayer = PlayerWrapper(handler.player).toLuaValue()
                 val results = luaLoader.eventManager.fireWithResults("player_join", luaPlayer)
                 if (results.any { it.isboolean() && !it.toboolean() }) {
                     handler.disconnect(Text.literal("You are not allowed to join this server"))
@@ -95,8 +96,9 @@ class PxRp : ModInitializer {
 
         ServerPlayConnectionEvents.DISCONNECT.register(fun(handler, server) {
             luaLoader.api.invalidatePlayer(handler.player.uuid)
+            ContainerManager.closeAll(handler.player)
             if (storageManager != null) {
-                val luaPlayer = Player(handler.player).toLuaValue()
+                val luaPlayer = PlayerWrapper(handler.player).toLuaValue()
                 luaLoader.eventManager.fire("player_leave", luaPlayer)
             }
             storageManager?.removePlayerData(handler.player.uuid.toString())
@@ -105,7 +107,7 @@ class PxRp : ModInitializer {
 
         ServerLivingEntityEvents.AFTER_DEATH.register(fun(entity, source) {
             if (entity is net.minecraft.server.network.ServerPlayerEntity && storageManager != null) {
-                val luaPlayer = Player(entity).toLuaValue()
+                val luaPlayer = PlayerWrapper(entity).toLuaValue()
                 val damageTypeName = source.name.substringAfterLast(".")
                 luaLoader.eventManager.fire("player_death", luaPlayer, LuaValue.valueOf(damageTypeName))
             }
@@ -113,7 +115,7 @@ class PxRp : ModInitializer {
 
         ServerMessageEvents.ALLOW_CHAT_MESSAGE.register(fun(message, sender, networkHandler): Boolean {
             if (storageManager != null) {
-                val luaPlayer = Player(sender).toLuaValue()
+                val luaPlayer = PlayerWrapper(sender).toLuaValue()
                 val text = message.signedBody.content
                 val results = luaLoader.eventManager.fireWithResults("player_chat", luaPlayer, LuaValue.valueOf(text))
                 if (results.any { it.isboolean() && !it.toboolean() }) return false
@@ -123,7 +125,7 @@ class PxRp : ModInitializer {
 
         PlayerBlockBreakEvents.BEFORE.register { world, player, pos, state, _ ->
             if (storageManager != null && player is net.minecraft.server.network.ServerPlayerEntity) {
-                val luaPlayer = Player(player).toLuaValue()
+                val luaPlayer = PlayerWrapper(player).toLuaValue()
                 val posTable = Vector(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble()).toLuaValue()
                 val blockId = LuaValue.valueOf(Registries.BLOCK.getId(state.block).toString())
                 val results = luaLoader.eventManager.fireWithResults("player_block_break", luaPlayer, posTable, blockId)
@@ -136,7 +138,7 @@ class PxRp : ModInitializer {
             if (storageManager != null && player is net.minecraft.server.network.ServerPlayerEntity && !world.isClient) {
                 val stack = player.getStackInHand(hand)
                 if (stack.item is BlockItem) {
-                    val luaPlayer = Player(player).toLuaValue()
+                    val luaPlayer = PlayerWrapper(player).toLuaValue()
                     val pos = hitResult.blockPos
                     val posTable = Vector(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble()).toLuaValue()
                     val blockId = LuaValue.valueOf(Registries.BLOCK.getId((stack.item as BlockItem).block).toString())
@@ -149,7 +151,7 @@ class PxRp : ModInitializer {
 
         UseItemCallback.EVENT.register { player, world, hand ->
             if (storageManager != null && player is net.minecraft.server.network.ServerPlayerEntity && !world.isClient) {
-                val luaPlayer = Player(player).toLuaValue()
+                val luaPlayer = PlayerWrapper(player).toLuaValue()
                 val handStr = if (hand == Hand.MAIN_HAND) "main" else "off"
                 val itemStack = player.getStackInHand(hand)
                 val itemWrapper = if (itemStack.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(itemStack)
@@ -162,7 +164,7 @@ class PxRp : ModInitializer {
 
         AttackEntityCallback.EVENT.register { player, world, hand, entity, hitResult ->
             if (storageManager != null && player is net.minecraft.server.network.ServerPlayerEntity && !world.isClient) {
-                val luaPlayer = Player(player).toLuaValue()
+                val luaPlayer = PlayerWrapper(player).toLuaValue()
                 val luaEntity = EntityWrapper(entity).toLuaValue()
                 val results = luaLoader.eventManager.fireWithResults("player_attack_entity", luaPlayer, luaEntity)
                 if (results.any { it.isboolean() && !it.toboolean() }) return@register net.minecraft.util.ActionResult.FAIL
@@ -172,7 +174,7 @@ class PxRp : ModInitializer {
 
         UseEntityCallback.EVENT.register { player, world, hand, entity, hitResult ->
             if (storageManager != null && player is net.minecraft.server.network.ServerPlayerEntity && !world.isClient) {
-                val luaPlayer = Player(player).toLuaValue()
+                val luaPlayer = PlayerWrapper(player).toLuaValue()
                 val luaEntity = EntityWrapper(entity).toLuaValue()
                 val results = luaLoader.eventManager.fireWithResults("player_interact_entity", luaPlayer, luaEntity)
                 if (results.any { it.isboolean() && !it.toboolean() }) return@register net.minecraft.util.ActionResult.FAIL
@@ -183,7 +185,7 @@ class PxRp : ModInitializer {
         ServerLivingEntityEvents.ALLOW_DAMAGE.register { entity, source, amount ->
             if (storageManager != null) {
                 if (entity is net.minecraft.server.network.ServerPlayerEntity) {
-                    val luaPlayer = Player(entity).toLuaValue()
+                    val luaPlayer = PlayerWrapper(entity).toLuaValue()
                     val results = luaLoader.eventManager.fireWithResults("player_hurt", luaPlayer, LuaValue.valueOf(source.name), LuaValue.valueOf(amount.toDouble()))
                     if (results.any { it.isboolean() && !it.toboolean() }) return@register false
                 } else {
@@ -198,7 +200,7 @@ class PxRp : ModInitializer {
         ServerLivingEntityEvents.AFTER_DAMAGE.register { entity, source, _, damageTaken, blocked ->
             if (storageManager != null) {
                 if (entity is net.minecraft.server.network.ServerPlayerEntity) {
-                    val luaPlayer = Player(entity).toLuaValue()
+                    val luaPlayer = PlayerWrapper(entity).toLuaValue()
                     luaLoader.eventManager.fire("player_damage", luaPlayer,
                         LuaValue.valueOf(source.name),
                         LuaValue.valueOf(damageTaken.toDouble()),
@@ -215,7 +217,7 @@ class PxRp : ModInitializer {
 
         ServerEntityCombatEvents.AFTER_KILLED_OTHER_ENTITY.register { world, entity, killedEntity, damageSource ->
             if (storageManager != null && entity is net.minecraft.server.network.ServerPlayerEntity) {
-                val luaPlayer = Player(entity).toLuaValue()
+                val luaPlayer = PlayerWrapper(entity).toLuaValue()
                 val luaKilled = EntityWrapper(killedEntity).toLuaValue()
                 luaLoader.eventManager.fire("player_kill", luaPlayer, luaKilled, LuaValue.valueOf(damageSource.name))
             }

@@ -1,18 +1,16 @@
 package ru.pyxiion.pxrp.api
 
+import net.minecraft.entity.Entity
+import net.minecraft.inventory.SimpleInventory
 import net.minecraft.nbt.NbtIo
 import net.minecraft.nbt.NbtSizeTracker
 import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket
 import net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket
-import net.minecraft.registry.Registries
 import net.minecraft.registry.Registry
 import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.sound.SoundCategory
-import net.minecraft.sound.SoundEvent
-import net.minecraft.structure.StructureTemplate
 import net.minecraft.text.Text
 import net.minecraft.util.Identifier
 import net.minecraft.util.math.Vec3d
@@ -21,11 +19,11 @@ import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
+import org.luaj.vm2.lib.VarArgFunction
 import ru.pyxiion.pxrp.Scheduler
 import ru.pyxiion.pxrp.asVarArgFunction
 import ru.pyxiion.pxrp.luaTableOf
 import ru.pyxiion.pxrp.storage.StorageManager
-import ru.pyxiion.pxrp.api.EntityWrapper
 import java.nio.file.Path
 import java.util.HashSet
 import java.util.UUID
@@ -54,30 +52,6 @@ class LuaMcApi(
         return getRegistryKey(RegistryKeys.WORLD, key)
     }
 
-
-    private fun requireSound(arg: LuaValue): SoundEvent {
-        val key = arg.checkjstring()
-        return Registries.SOUND_EVENT.get(getRegistryKey(RegistryKeys.SOUND_EVENT, key))
-            ?: throw IllegalArgumentException("Sound $key not found")
-    }
-
-
-    private fun playSound(args: Varargs) {
-        require(args.narg() in 5..7) { "playSound(sound, x, y, z, world, volume = 1, pitch[0-2] = 1) requires 5..7 arguments" }
-        val sound = requireSound(args.arg(1))
-        val (x, y, z) = (2..4).map { args.arg(it).checkdouble() }
-        val world = requireWorld(args.arg(5))
-        val (volume, pitch) = (6..7).map { args.arg(it).optdouble(1.0).toFloat() }
-
-        world.playSound(
-            null,
-            x, y, z,
-            sound,
-            SoundCategory.PLAYERS,
-            volume,
-            pitch
-        )
-    }
 
     private fun doBroadcast(text: String, pos: Vec3d?, world: RegistryKey<World>?, range: Double?, overlay: Int?) {
         var players = server.playerManager.playerList
@@ -146,7 +120,7 @@ class LuaMcApi(
     private fun luaGetPlayers(args: Varargs): Varargs {
         val list = LuaTable()
         server.playerManager.playerList.forEachIndexed { i, p ->
-            list.set(i + 1, playerCache.getOrPut(p.uuid) { Player(p).toLuaValue() })
+            list.set(i + 1, playerCache.getOrPut(p.uuid) { PlayerWrapper(p).toLuaValue() })
         }
         return list
     }
@@ -156,7 +130,8 @@ class LuaMcApi(
         val key = RegistryKey.of(RegistryKeys.WORLD, Identifier.of(name))
         val world = server.getWorld(key)
             ?: throw IllegalArgumentException("World '$name' not found")
-        return World(world, playerCache).toLuaValue()
+        WorldWrapper.playerCache = this.playerCache
+        return WorldWrapper(world).toLuaValue()
     }
 
     private fun luaLoadStructure(args: Varargs): Varargs {
@@ -164,14 +139,14 @@ class LuaMcApi(
         val manager = server.structureTemplateManager
         val template = manager.getTemplate(Identifier.of(id))
             .orElseThrow { LuaError("Структура '$id' не найдена") }
-        return StructureWrapper(template, server).toLuaValue()
+        return StructureWrapper(template).toLuaValue()
     }
 
     private fun luaLoadStructureFile(args: Varargs): Varargs {
         val path = args.arg(1).checkjstring()
         val nbt = NbtIo.readCompressed(Path.of(path), NbtSizeTracker.ofUnlimitedBytes())
         val template = server.structureTemplateManager.createTemplate(nbt)
-        return StructureWrapper(template, server).toLuaValue()
+        return StructureWrapper(template).toLuaValue()
     }
 
     private fun luaGetMetatable(args: Varargs): Varargs {
@@ -184,7 +159,6 @@ class LuaMcApi(
         val sb = StringBuilder()
         val seen = HashSet<Int>()
         dumpValue(args.arg(1), sb, 0, maxDepth, seen)
-        println(sb.toString())
         return LuaValue.valueOf(sb.toString())
     }
 
@@ -279,9 +253,29 @@ class LuaMcApi(
     }
 
     fun toTable(): LuaTable {
+        MetaTableRegistry.init()
+
+        MetaTableRegistry.ITEM.set("serialise", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val self = args.arg(1).checktable()
+                val stack = ItemStackWrapper.unwrap(self)
+                    ?: throw LuaError("item:serialise(): не ItemStack")
+                val json = ItemStackWrapper.toJson(stack, server.registryManager)
+                return LuaValue.valueOf(json)
+            }
+        })
+
+        MetaTableRegistry.INVENTORY.set("serialise", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val self = args.arg(1).checktable()
+                val inv = self.rawget("__pxrp_object").checkuserdata() as SimpleInventory
+                val json = InvWrapper.serialise(inv, server.registryManager)
+                return LuaValue.valueOf(json)
+            }
+        })
+
         return luaTableOf(
             "broadcast" to this::broadcast.asVarArgFunction(),
-            "playSound" to this::playSound.asVarArgFunction(),
             "data" to storage.getGlobalData(),
             "time" to this::luaTime.asVarArgFunction(),
             "schedule" to this::luaSchedule.asVarArgFunction(),
@@ -295,6 +289,52 @@ class LuaMcApi(
             "loadStructureFile" to this::luaLoadStructureFile.asVarArgFunction(),
             "dump" to this::luaDump.asVarArgFunction(),
             "getMetatable" to this::luaGetMetatable.asVarArgFunction(),
+            "serialise" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val type = args.arg(1).checkjstring()
+                    when (type) {
+                        "item" -> {
+                            val obj = args.arg(2)
+                            val stack = ItemStackWrapper.unwrap(obj)
+                                ?: throw LuaError("mc.serialise('item', ...): ожидается ItemStack")
+                            val json = ItemStackWrapper.toJson(stack, server.registryManager)
+                            return LuaValue.valueOf(json)
+                        }
+                        "inventory" -> {
+                            val obj = args.arg(2)
+                            val inv = obj.rawget("__pxrp_object").checkuserdata() as SimpleInventory
+                            val json = InvWrapper.serialise(inv, server.registryManager)
+                            return LuaValue.valueOf(json)
+                        }
+                        else -> throw LuaError("mc.serialise: неизвестный тип '$type'")
+                    }
+                }
+            },
+            "deserialise" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val type = args.arg(1).checkjstring()
+                    val data = args.arg(2).checkjstring()
+                    when (type) {
+                        "item" -> {
+                            val stack = ItemStackWrapper.fromJson(data, server.registryManager)
+                            return if (stack.isEmpty) LuaValue.NIL else ItemStackWrapper.wrap(stack)
+                        }
+                        "inventory" -> {
+                            val inv = InvWrapper.deserialise(data, server.registryManager)
+                            return InvWrapper(inv).toLuaValue()
+                        }
+                        else -> throw LuaError("mc.deserialise: неизвестный тип '$type'")
+                    }
+                }
+            },
+            "createInventory" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val size = args.arg(1).checkint()
+                    if (size < 9 || size > 54 || size % 9 != 0)
+                        throw LuaError("mc.createInventory: размер должен быть кратен 9 и от 9 до 54")
+                    return InvWrapper(LockableInventory(size)).toLuaValue()
+                }
+            },
         )
     }
 }

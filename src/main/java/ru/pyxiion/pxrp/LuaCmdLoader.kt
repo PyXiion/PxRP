@@ -26,7 +26,9 @@ import ru.pyxiion.pxrp.PxRp.Companion.logger
 import ru.pyxiion.pxrp.api.ItemStackWrapper
 import ru.pyxiion.pxrp.api.LuaMcApi
 import ru.pyxiion.pxrp.api.PersonalSidebarManager
-import ru.pyxiion.pxrp.api.Player
+import ru.pyxiion.pxrp.api.PlayerWrapper
+import ru.pyxiion.pxrp.api.vecTable
+import ru.pyxiion.pxrp.api.ContainerManager
 import ru.pyxiion.pxrp.storage.StorageManager
 import ru.pyxiion.pxrp.types.ChoiceArgumentType
 import ru.pyxiion.pxrp.types.LuaArgumentType
@@ -66,7 +68,7 @@ class LuaCmdLoader(
         },
         "player" to object : LuaArgumentType {
             override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
-                return Player(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
+                return PlayerWrapper(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
             }
 
             override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
@@ -75,7 +77,7 @@ class LuaCmdLoader(
         },
         "target" to object : LuaArgumentType {
             override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
-                return Player(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
+                return PlayerWrapper(EntityArgumentType.getPlayer(ctx, name)!!).toLuaValue()
             }
 
             override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
@@ -163,6 +165,17 @@ class LuaCmdLoader(
         globals.get("package").set("path", LuaValue.valueOf("${pxrpDir}/?.lua;${pxrpDir}/?/init.lua;?.lua"))
 
         globals.set("register", this::register.asVarArgFunction())
+        val vecConstructor = object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                require(args.narg() >= 3) { "Vec(x, y, z) требует 3 аргумента" }
+                val x = args.arg(1).checkdouble()
+                val y = args.arg(2).checkdouble()
+                val z = args.arg(3).checkdouble()
+                return vecTable(x, y, z)
+            }
+        }
+        globals.set("Vec", vecConstructor)
+        globals.set("vec", vecConstructor)
         val mcTable = api.toTable()
         val onHandler: (Varargs) -> Varargs = { args: Varargs ->
             require(args.narg() == 2) { "on(event, handler) requires 2 arguments" }
@@ -203,6 +216,7 @@ class LuaCmdLoader(
         commandManager!!.clear()
         eventManager.clear()
         scheduler.clear()
+        ContainerManager.closeAll()
         prepareGlobals()
 
         val sources = getLuaSources()
@@ -326,7 +340,7 @@ class LuaCmdLoader(
         variant: List<SyntaxNode>,
         argDefs: Map<String, ArgDef>
     ): Array<LuaValue> {
-        val player = Player(ctx.source.playerOrThrow).toLuaValue()
+        val player = PlayerWrapper(ctx.source.playerOrThrow).toLuaValue()
         val ctxTable = luaTableOf("player" to player)
 
         val result = mutableListOf<LuaValue>()

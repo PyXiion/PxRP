@@ -1,5 +1,7 @@
 package ru.pyxiion.pxrp.api
 
+import com.google.gson.JsonParser
+import com.mojang.serialization.JsonOps
 import net.minecraft.component.DataComponentTypes
 import net.minecraft.component.type.AttributeModifierSlot
 import net.minecraft.component.type.AttributeModifiersComponent
@@ -9,24 +11,36 @@ import net.minecraft.entity.attribute.EntityAttributeModifier
 import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.item.ItemStack
 import net.minecraft.registry.Registries
+import net.minecraft.registry.RegistryOps
+import net.minecraft.registry.RegistryWrapper
 import net.minecraft.text.Text
 import net.minecraft.util.Identifier
 import net.minecraft.util.Unit
+import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.jse.CoerceJavaToLua
 
 object ItemStackWrapper {
 
-    private const val MARKER = "__pxrp_item"
-    private const val STORAGE = "_stack"
+    private const val TYPE_KEY = "__pxrp_type"
+    private const val OBJECT_KEY = "__pxrp_object"
+    private const val TYPE_VALUE = "item"
 
     fun wrap(stack: ItemStack): LuaValue {
         val t = LuaTable()
         t.rawset("id", LuaValue.valueOf(Registries.ITEM.getId(stack.item).toString()))
         t.rawset("count", LuaValue.valueOf(stack.count))
-        t.rawset(MARKER, LuaValue.valueOf(true))
-        t.rawset(STORAGE, CoerceJavaToLua.coerce(stack))
+        t.rawset(TYPE_KEY, LuaValue.valueOf(TYPE_VALUE))
+        t.rawset(OBJECT_KEY, CoerceJavaToLua.coerce(stack))
+        t.setmetatable(MetaTableRegistry.ITEM)
+        val cn = stack.get(DataComponentTypes.CUSTOM_NAME)
+        if (cn != null) {
+            t.rawset("name", LuaValue.valueOf(cn.string))
+        }
+        if (stack.contains(DataComponentTypes.UNBREAKABLE)) {
+            t.rawset("unbreakable", LuaValue.TRUE)
+        }
         val cmd = stack.get(DataComponentTypes.CUSTOM_MODEL_DATA)
         if (cmd != null) {
             val first = cmd.floats.firstOrNull()
@@ -40,8 +54,23 @@ object ItemStackWrapper {
     fun unwrap(value: LuaValue): ItemStack? {
         if (!value.istable()) return null
         val table = value.checktable()
-        if (!table.get(MARKER).toboolean()) return null
-        return (table.get(STORAGE).checkuserdata(ItemStack::class.java) as ItemStack).copy()
+        if (table.get(TYPE_KEY).tojstring() != TYPE_VALUE) return null
+        return (table.get(OBJECT_KEY).checkuserdata(ItemStack::class.java) as ItemStack).copy()
+    }
+
+    fun toJson(stack: ItemStack, lookup: RegistryWrapper.WrapperLookup): String {
+        val ops = RegistryOps.of(JsonOps.INSTANCE, lookup)
+        return ItemStack.CODEC.encodeStart(ops, stack)
+            .result()
+            .orElseThrow { LuaError("Не удалось сериализовать предмет") }
+            .toString()
+    }
+
+    fun fromJson(json: String, lookup: RegistryWrapper.WrapperLookup): ItemStack {
+        val ops = RegistryOps.of(JsonOps.INSTANCE, lookup)
+        return ItemStack.CODEC.parse(ops, JsonParser.parseString(json))
+            .result()
+            .orElseThrow { LuaError("Не удалось десериализовать предмет") }
     }
 
     fun createItem(id: String, countOrTable: LuaValue? = null): ItemStack {
