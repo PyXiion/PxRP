@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.6.0 — Vector arithmetic, Inventory/Container API, Raycast, shared metatables
+
+### Breaking changes
+
+- `Player.kt` → `PlayerWrapper.kt`, `World.kt` → `WorldWrapper.kt` (internal refactor, no Lua API change)
+- `player.world:particle(id, x, y, z)` → `player.world:particle(id, Vec(x, y, z), opts?)` (positional args replaced by vector + options table)
+- Removed dead `coerce/KotlinToLua.kt`
+
+### New vector API
+
+- `Vec(x, y, z)` global constructor with `+`, `-`, `*`, `/`, `unm`, `==`, `tostring` operators
+- Component-wise for `v1 * v2`, scalar for `v / n`, both `v * n` and `n * v`
+- Vector metatable accessible via `mc.getMetatable("vec")`
+
+### New inventory / container API
+
+| API | Description |
+|-----|-------------|
+| `mc.createInventory(size)` | Creates a virtual SimpleInventory (9–54, multiple of 9) |
+| `inv:getItem(slot)`, `inv:setItem(slot, item)` | Slot access (1-based) |
+| `inv:fill(item)`, `inv:clear()` | Bulk ops |
+| `inv:open(player, title?)` | Opens chest screen → Container |
+| `container:onClick(callback)` | Registers click handler (auto-locks inventory) |
+| `container:onClick(nil)` | Unlocks inventory |
+| `container:close()` | Closes the screen |
+
+### New raycast API
+
+Both `entity:raycast(range)` and `world:raycast(start, dir, range)` now return a result table:
+
+```lua
+-- Block hit:
+{ type = "block", blockPos = Vec(...), hit = Vec(...), side = "north", normal = Vec(...) }
+
+-- Entity hit:
+{ type = "entity", entity = EntityWrapper, hit = Vec(...) }
+```
+
+### New world methods
+
+- `world:raycast(startVec, dirVec, range, includeFluids?, includeEntities?)`
+- `world:playSound(id, x, y, z, volume?, pitch?)`
+- `world:particle(id, pos, opts?)` — vector position, options table with `count`, `spread`, `speed`, `data`
+
+### New `ItemStack` features
+
+- Item wrappers now use shared metatable (`mc.getMetatable("item")`)
+- `mc.createItem` full component table (name, lore, unbreakable, attackDamage, etc.)
+- `ItemStackWrapper.toJson`/`fromJson` for serialization
+
+### Other additions
+
+- `nbtToLua` / `luaToNbt` utility functions in `Utils.kt`
+- `chestgui.lua` — chest GUI library with grid positioning
+- All wrappers now use **shared metatables** (one per type) — `__index`, `__newindex`, `__pairs` on the metatable, methods via `rawset`
+- `player:damage(amount)`, `player:heal(amount)`, `player:give(id/count or ItemStack)`, `player:setItem(slot, item)`, `player:getItem(slot)`, `player:clear()`
+
+---
+
 ## 0.5.1 — Rebuild
 
 No API changes. CI fix for Modrinth publish.
