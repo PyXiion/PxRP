@@ -8,6 +8,7 @@ import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import com.mojang.brigadier.exceptions.CommandSyntaxException
 import com.mojang.brigadier.tree.ArgumentCommandNode
+import kotlinx.coroutines.future.await
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.command.argument.BlockPosArgumentType
 import net.minecraft.command.argument.EntityArgumentType
@@ -15,6 +16,7 @@ import net.minecraft.command.argument.MessageArgumentType
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.CommandManager
 import net.minecraft.server.command.ServerCommandSource
+import net.minecraft.server.network.ServerPlayerEntity
 import net.minecraft.text.Text
 import org.luaj.vm2.*
 import org.luaj.vm2.LuaValue.NIL
@@ -22,16 +24,20 @@ import org.luaj.vm2.compiler.LuaC
 import org.luaj.vm2.lib.*
 import org.luaj.vm2.lib.jse.JseBaseLib
 import org.luaj.vm2.lib.jse.JseMathLib
+import org.luaj.vm2.lib.jse.JsePlatform
 import ru.pyxiion.pxrp.PxRp.Companion.logger
 import ru.pyxiion.pxrp.api.ItemStackWrapper
 import ru.pyxiion.pxrp.api.LuaMcApi
-import ru.pyxiion.pxrp.api.PersonalSidebarManager
+import ru.pyxiion.pxrp.api.MobAIManager
 import ru.pyxiion.pxrp.api.PlayerWrapper
+import ru.pyxiion.pxrp.api.SidebarManager
+import ru.pyxiion.pxrp.api.SidebarWrapper
 import ru.pyxiion.pxrp.api.vecTable
 import ru.pyxiion.pxrp.api.ContainerManager
 import ru.pyxiion.pxrp.storage.StorageManager
 import ru.pyxiion.pxrp.types.ChoiceArgumentType
 import ru.pyxiion.pxrp.types.LuaArgumentType
+import ru.pyxiion.pxrp.api.AsyncLib
 import ru.pyxiion.pxrp.types.toLuaValue
 import java.io.FileOutputStream
 import kotlin.io.path.exists
@@ -42,8 +48,7 @@ class LuaCmdLoader(
     private val server: MinecraftServer,
     private val storageManager: StorageManager
 ) {
-    // Lua global environment shared across all script executions
-    private lateinit var globals: Globals
+    private lateinit var luaState: LuaState
 
     // Maps argument type names (used in Lua scripts) to their Brigadier node builders and runtime value extractors
     private val argumentTypes = mapOf(
@@ -123,7 +128,11 @@ class LuaCmdLoader(
         "block_pos" to object : LuaArgumentType {
             override fun getArg(ctx: CommandContext<ServerCommandSource>, name: String): Any {
                 val pos = BlockPosArgumentType.getBlockPos(ctx, name)
-                return luaTableOf("x" to LuaValue.valueOf(pos.x), "y" to LuaValue.valueOf(pos.y), "z" to LuaValue.valueOf(pos.z))
+                return luaTableOf(
+                    "x" to LuaValue.valueOf(pos.x),
+                    "y" to LuaValue.valueOf(pos.y),
+                    "z" to LuaValue.valueOf(pos.z)
+                )
             }
 
             override fun getBrigadierArgument(name: String): ArgumentCommandNode<ServerCommandSource, *> {
@@ -144,21 +153,20 @@ class LuaCmdLoader(
     // Task scheduler for mc.schedule / mc.scheduleRepeating
     val scheduler: Scheduler get() = api.scheduler
 
-    // Manages per-player personal sidebars
-    val personalSidebarManager = PersonalSidebarManager(server)
-
     // Sets up the Lua globals environment: installs standard libraries and registers
     // the `register` function and `mc` API table for Lua scripts
     fun prepareGlobals() {
-        globals = Globals()
-        LuaC.install(globals)
-        LoadState.install(globals)
+        luaState = LuaState()
+        LuaC.install(luaState)
+        LoadState.install(luaState)
+
+        val globals = luaState.globals
         globals.load(JseBaseLib())
         globals.load(PackageLib())
         globals.load(Bit32Lib())
         globals.load(TableLib())
         globals.load(StringLib())
-//        globals.load(CoroutineLib())
+        globals.load(CoroutineLib())
         globals.load(JseMathLib())
 
         val pxrpDir = FabricLoader.getInstance().configDir.resolve("pxrp").toAbsolutePath()
@@ -174,7 +182,6 @@ class LuaCmdLoader(
                 return vecTable(x, y, z)
             }
         }
-        globals.set("Vec", vecConstructor)
         globals.set("vec", vecConstructor)
         val mcTable = api.toTable()
         val onHandler: (Varargs) -> Varargs = { args: Varargs ->
@@ -203,6 +210,7 @@ class LuaCmdLoader(
                 return ItemStackWrapper.wrap(stack)
             }
         })
+        AsyncLib(server, luaState, api.scheduler).install(mcTable)
         globals.set("mc", mcTable)
     }
 
@@ -213,16 +221,25 @@ class LuaCmdLoader(
         if (commandManager == null)
             commandManager = LuaCommandManager(server)
 
+        eventManager.fire("uninit")
         commandManager!!.clear()
         eventManager.clear()
         scheduler.clear()
         ContainerManager.closeAll()
+        SidebarManager.closeAll()
+        MobAIManager.restoreAll()
+        LuaMixinManager.clearHooks()
+
+
         prepareGlobals()
 
         val sources = getLuaSources()
         for ((name, source) in sources) {
-            globals.load(source, name).call()
+            luaState.load(source, name).call()
         }
+
+        MobAIManager.scanAndReapply(server)
+        eventManager.fire("init")
 
         commandManager!!.registerAll()
         logger.info("PxRP зарегистрировал свои команды")
@@ -331,6 +348,7 @@ class LuaCmdLoader(
                 val choices = params.split(",").map { it.trim() }
                 ChoiceArgumentType(choices)
             }
+
             else -> throw IllegalArgumentException("Unknown argument type '$baseType' with parameters")
         }
     }

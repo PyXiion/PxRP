@@ -6,6 +6,8 @@
   "mixins": [
     "CommandNodeMixin",
     "MinecraftServerMixin",
+    "MobEntityMixin",
+    "LivingEntityMixin",
     "ScreenHandlerMixin",
     "StructureTemplateMixin"
   ],

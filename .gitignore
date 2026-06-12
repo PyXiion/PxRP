@@ -9,3 +9,9 @@ bin/**
 .project
 .settings/
 logs/
+
+net/
+
+site/.astro/**
+site/node_modules/**
+site/dist/**

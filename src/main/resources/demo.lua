@@ -17,7 +17,7 @@
 --   6. Report cooldown        — per-player throttle + notifications
 --   7. New arg types          — int, double, bool, block_pos
 --   8. Choice & optional      — choice=... syntax and [name:type] optional args
---   9. Player info            — reading aggregate entity data
+--   9. Player info            — reading aggregate entity data, hasPermission
 --  10. Item & inventory       — kits, hats, rename, repair, invsee
 --  11. World & entity         — spawn, tags, time, weather, particle, broadcastInRange
 --  12. Scheduler              — mc.schedule, mc.scheduleRepeating, mc.cancelTask
@@ -364,6 +364,14 @@ function whoisHandler(ctx, target)
     )
 end
 
+-- /checkperm <permission> — check if the player has a specific permission
+-- Uses the Fabric Permissions API (LuckPerms, etc.) or OP levels.
+-- Returns true/false based on the permission lookup.
+function checkpermHandler(ctx, perm)
+    local result = ctx.player:hasPermission(perm)
+    ctx.player:sendMessage("§aHas §f'" .. perm .. "'§7: §f" .. tostring(result))
+end
+
 
 -- ==========================================================================
 -- Pattern 10: Item & inventory manipulation
@@ -675,22 +683,25 @@ end
 --                       — set a custom sidebar with up to 3 lines
 --
 -- KEY PATTERNS:
---   - player.sidebar = { title = "...", lines = { ... } } sets a per-player
---     sidebar visible only to that player
---   - player.sidebar.title and player.sidebar.lines read/write individual
---     fields without recreating the whole sidebar
---   - player.sidebar = nil clears the sidebar
---   - The sidebar persists across world changes and reconnects
---   - ⚠ Setting player.sidebar.lines = { "a", "b" } replaces ALL lines
+--   - player.sidebar = { title = "...", lines = {...} } creates a sidebar (auto-shown on creation)
+--   - sb.title / sb.lines are read/write properties
+--   - sb:setLine(n, text) sets a specific line at index n
+--   - sb:show() displays, sb:hide() hides (keeps data), sb:destroy() removes
+--   - sb.visible, sb.lineCount are readable properties
 
 local sidebarEnabled = {}
+local activeSidebars = {}
 
 function sidebarHandler(ctx)
     local player = ctx.player
 
     if sidebarEnabled[player.name] then
         sidebarEnabled[player.name] = nil
-        player.sidebar = nil
+        local sb = activeSidebars[player.name]
+        if sb then
+            sb:destroy()
+            activeSidebars[player.name] = nil
+        end
         player:sendMessage("§aSidebar §cdisabled")
         return
     end
@@ -705,8 +716,10 @@ function sidebarHandler(ctx)
             "§eLvl  §f" .. player.xpLevel,
             "§ePing §f" .. player.ping .. "ms",
             "§7━━━━━━━━━━━━━━",
-        },
+        }
     }
+    local sb = player.sidebar
+    activeSidebars[player.name] = sb
 
     -- Update HP/Food every 2 seconds while enabled
     local id
@@ -716,10 +729,10 @@ function sidebarHandler(ctx)
             return
         end
 
-        local sidebar = player.sidebar
-        if sidebar then
-            sidebar.title = "§6§l" .. player.name
-            sidebar.lines = {
+        local sb = activeSidebars[player.name]
+        if sb then
+            sb.title = "§6§l" .. player.name
+            sb.lines = {
                 "§7━━━━━━━━━━━━━━",
                 "§eHP  §f" .. string.format("%.1f", player.health) .. "§7/§f" .. string.format("%.0f", player.maxHealth),
                 "§eFood §f" .. player.food,
@@ -736,11 +749,9 @@ end
 function sidebarsetHandler(ctx, title, line1, line2, line3)
     local player = ctx.player
     local lines = { "§7━━━━━━━━━━━━━━" }
-
     if line1 then table.insert(lines, line1) end
     if line2 then table.insert(lines, line2) end
     if line3 then table.insert(lines, line3) end
-
     table.insert(lines, "§7━━━━━━━━━━━━━━")
 
     player.sidebar = { title = title, lines = lines }
@@ -756,14 +767,13 @@ mc.on("player_join", function(player)
             "",
             "§e/server §7info",
             "§e/help   §7commands",
-        },
+        }
     }
+    local sb = player.sidebar
 
     -- Clear after 10 seconds
     mc.schedule(200, function()
-        if player.sidebar then
-            player.sidebar = nil
-        end
+        pcall(function() sb:destroy() end)
     end)
 end)
 
@@ -1330,6 +1340,7 @@ register("setwelcome <msg:text>",                setwelcomeHandler,        "pxrp
 register("setspawn",                             setspawnHandler,          "pxrp.admin")
 register("report <msg:text>",                    reportHandler)
 register("whois <target:player>",                whoisHandler)
+register("checkperm <perm:text>",                checkpermHandler)
 
 -- New argument types
 register("math <a:double> <op:word> <b:double>",    mathHandler)

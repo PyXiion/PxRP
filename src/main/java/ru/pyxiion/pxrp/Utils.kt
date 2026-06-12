@@ -41,22 +41,21 @@ fun LuaValue.checkstringlist(): List<String> {
     return result
 }
 
+fun Entity.checkPermission(permission: String): Boolean = Permissions.check(this, permission)
 
-fun Entity.checkPermission(permission: String): Boolean {
-    1 to 2
-    return Permissions.check(this, permission)
-}
-
-fun CommandSource.checkPermission(permission: String): Boolean {
-    1 to 2
-    return Permissions.check(this, permission)
-}
+fun CommandSource.checkPermission(permission: String): Boolean = Permissions.check(this, permission)
 
 fun luaTableOf(vararg items: Pair<String, LuaValue>): LuaTable {
     return LuaTable().apply {
         items.forEach { (k, v) ->
             this.set(k, v)
         }
+    }
+}
+
+fun luaArrayOf(vararg items: LuaValue): LuaTable {
+    return LuaTable().apply {
+        items.forEachIndexed { i, v -> this.set(i + 1, v) }
     }
 }
 

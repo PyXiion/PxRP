@@ -262,6 +262,7 @@ class EntityWrapper(private val entity: Entity) {
                 }
             })
 
+            // .raycast(self, range, includeFluids=false, includeEntities=true)
             meta.rawset("raycast", object : VarArgFunction() {
                 override fun invoke(args: Varargs): Varargs {
                     val self = args.arg(1).checktable()

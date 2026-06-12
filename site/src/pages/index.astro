@@ -1,0 +1,419 @@
+---
+import "../styles/custom.css";
+import { codeToHtml } from "shiki";
+
+const examples = [
+  {
+    id: "spells",
+    label: "Spells",
+    file: "spells.lua",
+    code: `-- Right-click blaze rod: raycast → knockback → fire → damage
+mc.on("player_use_item", function(player, hand, _, id)
+    -- Early return if not the item we care about
+    if id ~= "minecraft:blaze_rod" then return end
+
+    -- Raycast from the player's eye position
+    local hit = player:raycast(15)
+    if not hit then return end
+
+    -- hit.type is "entity" (hit a mob) or "block" (hit terrain)
+    if hit.type == "entity" then
+        local target = hit.entity
+
+        -- Vector subtraction + normalisation for directional knockback
+        local d = target.pos - player.pos
+        local dist = math.sqrt(d.x^2 + d.y^2 + d.z^2)
+        if dist > 0 then
+            target.pos = target.pos + d / dist * 3
+        end
+
+        -- Entity methods: fire ticks, damage with source, status effect
+        target:setOnFireFor(80)
+        target:damage(6, player)
+        target:addEffect("minecraft:slowness", 60, 1)
+    end
+end)`,
+  },
+  {
+    id: "class",
+    label: "Shop GUI",
+    file: "shop.lua",
+    code: `-- Chest GUI shop: require library, build once, open for any player
+local chestgui = require "chestgui"
+
+-- Create a 3-row (27-slot) GUI
+local gui = chestgui.create(3, "Shop")
+local glass = mc.createItem("black_stained_glass_pane", { name = " " })
+
+-- Decorate with glass border — no callback = stuck in place
+for col = 1, 9 do
+    gui:decorate(1, col, glass)
+    gui:decorate(3, col, glass)
+end
+
+-- gui:set(row, col, item, callback) — clickable item
+-- Returning false cancels the click (prevents item theft)
+gui:set(2, 3, mc.createItem("diamond", { name = "Diamond", lore = { "10 coins" } }),
+    function(player)
+        -- player.data is per-player persistent storage (JSON, survives reloads)
+        local coins = player.data.coins or 0
+        if coins < 10 then
+            player:sendMessage("Not enough coins!")
+            return false
+        end
+
+        player.data.coins = coins - 10
+        player:give(mc.createItem("diamond"))
+        player:sendMessage("Bought a diamond! Coins: " .. (coins - 10))
+        return false
+    end)
+
+register("shop", function(ctx)
+    gui:open(ctx.player)
+end)`,
+  },
+  {
+    id: "welcome",
+    label: "Sidebar",
+    file: "sidebar.lua",
+    code: `-- Live per-player sidebar refreshing every 2s, self-cleaning on disconnect
+mc.on("player_join", function(player)
+    -- Per-player data persists as JSON across reloads
+    local visits = player.data.visits or 0
+    visits = visits + 1
+    player.data.visits = visits
+
+    if visits == 1 then
+        player:give(mc.createItem("compass", 1))
+    end
+
+    -- Sidebar is packet-based — never touches the global scoreboard
+    player.sidebar = {
+        title = "Stats",
+        lines = {
+            "HP " .. math.floor(player.health),
+            "Visits " .. visits,
+            "Online " .. mc.onlineCount,
+        }
+    }
+
+    -- mc.scheduleRepeating(delay, interval, callback) — 20 ticks = 1 second
+    local id = mc.scheduleRepeating(40, 40, function()
+        local sb = player.sidebar
+        if sb then
+            sb.lines = {
+                "HP " .. math.floor(player.health),
+                "Visits " .. visits,
+                "Online " .. mc.onlineCount,
+            }
+        else
+            mc.cancelTask(id)  -- sidebar destroyed, stop updating
+        end
+    end)
+
+    -- Clean up the repeating task when the player disconnects
+    mc.on("player_leave", function(p)
+        if p.uuid == player.uuid then
+            mc.cancelTask(id)
+        end
+    end)
+end)`,
+  },
+  {
+    id: "ai",
+    label: "Mob AI",
+    file: "guard_beast.lua",
+    code: `-- Custom guard behaviour: patrol home, hunt players, return
+mc.registerBehaviour("guard_beast", function(self, state)
+    -- self: the mob wrapper; state: persists across server ticks per mob
+    if not state.home then
+        state.home = self.pos  -- remember spawn point on first tick
+    end
+
+    -- Throttle: only run every 10 ticks (0.5s) to avoid spam
+    state.timer = (state.timer or 0) + 1
+    if state.timer % 10 ~= 0 then return end
+
+    -- Search for players within 10 blocks
+    local players = self.world:getEntities(self.pos, 10, "minecraft:player")
+    if #players > 0 then
+        -- Navigate to nearest player, attack when in melee range
+        self:navigateTo(players[1])
+        if self:distanceTo(players[1]) < 2.5 then
+            self:tryAttack(players[1])
+        end
+    else
+        -- No threat — return to home position if drifted away
+        local d = self:distanceTo(state.home)
+        if d > 2 then
+            self:navigateTo(state.home.x, state.home.y, state.home.z)
+        end
+    end
+end)
+
+-- Spawn a zombie and assign the behaviour
+local guard = world:spawn("minecraft:zombie", player.pos)
+guard.customName = "Guard"
+guard.health = 40
+guard:setAI("guard_beast")`,
+  },
+  {
+    id: "commands",
+    label: "Commands",
+    file: "commands.lua",
+    code: `-- Simple: no arguments, no permission — anyone can use it
+register("fly", function(ctx)
+    ctx.player.isFlying = not ctx.player.isFlying
+    ctx.player:sendMessage("Flight: " .. tostring(ctx.player.isFlying))
+end)
+
+-- Complex: choice type (tab-completion), optional target, permission
+register("kit <name:choice=warrior,archer,miner> [target:player]", function(ctx, name, target)
+    -- target is nil when omitted; fall back to the command sender
+    local player = target or ctx.player
+    player:clear()
+
+    if name == "warrior" then
+        -- mc.createItem(id, {components}) — name, unbreakable, lore, count...
+        player:give(mc.createItem("iron_sword", { name = "Warrior Blade", unbreakable = true }))
+        player:give(mc.createItem("iron_chestplate"))
+    elseif name == "archer" then
+        player:give(mc.createItem("bow", { name = "Longbow", unbreakable = true }))
+        player:give(mc.createItem("arrow", 64))
+    end
+end, "pxrp.admin")  -- only operators or those with the permission node`,
+  },
+];
+
+const highlighted = await Promise.all(
+  examples.map((ex) =>
+    codeToHtml(ex.code, { lang: "lua", theme: "min-dark" })
+  )
+);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PxIgnis — Lua Scripting Engine for Minecraft Servers</title>
+    <meta name="description" content="Server-side Lua scripting framework for Fabric. Async coroutines, custom mob AI, dynamic UI, hot reload." />
+    <meta name="theme-color" content="#0a0a0c" />
+    <meta property="og:title" content="PxIgnis — Lua Scripting Engine for Minecraft Servers" />
+    <meta property="og:description" content="Server-side Lua scripting framework for Fabric. Async coroutines, custom mob AI, dynamic UI, hot reload." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body class="landing-page">
+    <div class="particles" aria-hidden="true">
+      {Array.from({ length: 20 }, (_, i) => (
+        <span
+          class="particle"
+          style={{
+            left: `${Math.random() * 100}%`,
+            animationDelay: `${Math.random() * 15}s`,
+            animationDuration: `${12 + Math.random() * 18}s`,
+            width: `${2 + Math.random() * 3}px`,
+            height: `${2 + Math.random() * 3}px`,
+          }}
+        ></span>
+      ))}
+    </div>
+
+    <!-- ─── Header ──────────────────────────────────────────────────── -->
+    <header class="site-header" id="site-header">
+      <div class="container header-inner">
+        <a href="/" class="header-logo">
+          <span class="logo-spark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="var(--px-accent)" stroke="var(--px-accent)"/>
+            </svg>
+          </span>
+          <span>PxIgnis</span>
+        </a>
+        <nav class="header-nav">
+          <a href="https://github.com/pyxiion/PxRP">GitHub</a>
+          <a href="https://modrinth.com/mod/pxrp">Modrinth</a>
+          <a href="/getting-started/">Lua API Reference</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <!-- ─── Hero ─────────────────────────────────────────────────── -->
+      <section class="hero">
+        <h1>PxIgnis: Lua Scripting Engine<br />for Minecraft Servers</h1>
+        <p>
+          Server-side framework (Fabric) for writing custom game logic, events,
+          interfaces, and mob AI in Lua with async support and hot
+          reloading (<code>/pxignis reload</code>) — no server restarts.
+          Built on <strong>PxLuaNova</strong>, a custom Lua 5.2 fork.
+        </p>
+        <div class="hero-actions">
+          <a href="https://github.com/pyxiion/PxRP" class="btn-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub Repository
+          </a>
+          <a href="/changelog/" class="btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-6M12 8V4M4 12h16"/></svg>
+            View Changelog
+          </a>
+        </div>
+      </section>
+
+      <!-- ─── Core Modules ──────────────────────────────────────────── -->
+      <section id="modules" class="modules section-pad">
+        <div class="container">
+          <h2 class="section-title">What You Get</h2>
+          <p class="section-subtitle">
+            Everything you need to script a server, built in.
+          </p>
+          <div class="modules-grid">
+            <div class="module-card">
+              <div class="module-header">
+                <span class="module-icon">🔥</span>
+                <h3>Hot Reload</h3>
+              </div>
+              <p>Edit scripts and run <code>/pxignis reload</code> — no server restarts, no lost connections. Persistent data (<code>mc.data</code>, <code>player.data</code>) is preserved across reloads.</p>
+            </div>
+            <div class="module-card">
+              <div class="module-header">
+                <span class="module-icon">⏳</span>
+                <h3>Async Runtime</h3>
+              </div>
+              <p>Coroutine-powered <code>mc.sleep(ticks)</code> and <code>mc.fetch(url)</code> with automatic JSON parsing. Yields the Lua coroutine, resumes on the server thread.</p>
+            </div>
+            <div class="module-card">
+              <div class="module-header">
+                <span class="module-icon">🧠</span>
+                <h3>Mob AI Framework</h3>
+              </div>
+              <p>MobEntity behaviour scripting. Register custom goals with native pathfinding, line-of-sight (<code>canSee</code>), and vanilla AI override. Built-in behaviours: <code>guard</code>, <code>pet</code>, <code>orbiter</code>, <code>wander</code>.</p>
+            </div>
+            <div class="module-card">
+              <div class="module-header">
+                <span class="module-icon">🖼️</span>
+                <h3>Dynamic UI</h3>
+              </div>
+              <p>Per-player scoreboard sidebars, chest GUI menus with click interception (<code>container:onClick</code>), and virtual inventories. Packet-based — never touches the global scoreboard, other players never see it.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Code Examples ─────────────────────────────────────────── -->
+      <section id="examples" class="code-section section-pad">
+        <div class="container">
+          <h2 class="section-title">Real Examples</h2>
+          <p class="section-subtitle">
+            Real scripts you can try. Click tabs to switch.
+          </p>
+
+          <div class="code-tabs">
+            <div class="tabs-header" role="tablist">
+              {examples.map((ex, i) => (
+                <button
+                  class="tab-btn"
+                  class:list={{ active: i === 0 }}
+                  data-tab={ex.id}
+                  role="tab"
+                  aria-selected={i === 0}
+                >{ex.label}</button>
+              ))}
+            </div>
+            <div class="tabs-body">
+              {examples.map((ex, i) => (
+                <div
+                  class="tab-pane"
+                  class:list={{ active: i === 0 }}
+                  data-pane={ex.id}
+                  role="tabpanel"
+                >
+                  <div class="pane-header">
+                    <span class="pane-filename">{ex.file}</span>
+                  </div>
+                  <div class="pane-body" set:html={highlighted[i]}></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Quick Start ───────────────────────────────────────────── -->
+      <section class="quickstart section-pad">
+        <div class="container">
+          <h2 class="section-title">Quick Start</h2>
+          <div class="quickstart-steps">
+            <div class="qs-step">
+              <div class="qs-num">1</div>
+              <p>Place <code>PxIgnis.jar</code> in your Fabric server's <code>mods/</code> folder.</p>
+            </div>
+            <div class="qs-step">
+              <div class="qs-num">2</div>
+              <p>Write scripts in <code>config/pxignis/scripts/</code>. The runtime loads all <code>*.lua</code> files alphabetically.</p>
+            </div>
+            <div class="qs-step">
+              <div class="qs-num">3</div>
+              <p>Run <code>/pxignis reload</code> in-game — no restart. Global data (<code>mc.data</code>) and per-player data auto-persist to JSON.</p>
+            </div>
+          </div>
+          <div class="quickstart-cta">
+            <a href="/getting-started/" class="btn-primary">Full Documentation →</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ─── Footer ─────────────────────────────────────────────────── -->
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <span>&copy; 2026 PyXiion.</span>
+        <div class="footer-links">
+          <a href="https://discord.gg/FyPWDheyzs" target="_blank" rel="noopener noreferrer" aria-label="Discord">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+          </a>
+          <a href="https://github.com/pyxiion/PxRP" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          </a>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      // ── Tab switching ────────────────────────────────────────────────
+      (function () {
+        const tabs = document.querySelectorAll(".tab-btn");
+        const panes = document.querySelectorAll(".tab-pane");
+
+        function activate(id) {
+          tabs.forEach((b) => {
+            b.classList.toggle("active", b.dataset.tab === id);
+            b.setAttribute("aria-selected", b.dataset.tab === id);
+          });
+          panes.forEach((p) => {
+            p.classList.toggle("active", p.dataset.pane === id);
+          });
+        }
+
+        tabs.forEach((b) =>
+          b.addEventListener("click", () => activate(b.dataset.tab))
+        );
+
+        // ── Scroll header ──────────────────────────────────────────────
+        const header = document.getElementById("site-header");
+        let ticking = false;
+        window.addEventListener("scroll", () => {
+          if (!ticking) {
+            requestAnimationFrame(() => {
+              header.classList.toggle("scrolled", window.scrollY > 50);
+              ticking = false;
+            });
+            ticking = true;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -1,3 +1,8 @@
+---
+title: Changelog
+description: Release history for PxIgnis.
+---
+
 # Changelog
 
 ## 0.7.0 — Mob AI, ByteBuddy hooks, sidebar rewrite, PxLuaNova migration

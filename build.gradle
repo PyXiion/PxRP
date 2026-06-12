@@ -35,11 +35,7 @@ loom {
 }
 
 repositories {
-    // Add repositories to retrieve artifacts from in here.
-    // You should only use this when depending on other mods because
-    // Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-    // See https://docs.gradle.org/current/userguide/declaring_repositories.html
-    // for more information about repositories.
+    mavenLocal()
     mavenCentral()
 }
 
@@ -52,15 +48,24 @@ dependencies {
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    // поддержка LUA
-    implementation "org.luaj:luaj-jse:3.0.1"
-    shadow "org.luaj:luaj-jse:3.0.1"
+    // поддержка LUA (PxLuaNova)
+    implementation "com.pxluanova:pxluanova-core:3.1.0"
+    shadow "com.pxluanova:pxluanova-core:3.1.0"
+    implementation "com.pxluanova:pxluanova-jse:3.1.0"
+    shadow "com.pxluanova:pxluanova-jse:3.1.0"
 
     // Permissions API
     modImplementation "me.lucko:fabric-permissions-api:0.6.1"
     shadow ("me.lucko:fabric-permissions-api:0.6.1") {
         transitive = false
     }
+
+    // Byte Buddy for mixins
+    implementation "net.bytebuddy:byte-buddy:1.18.9"
+    shadow "net.bytebuddy:byte-buddy:1.18.9"
+
+    implementation "net.bytebuddy:byte-buddy-agent:1.18.9"
+    shadow "net.bytebuddy:byte-buddy-agent:1.18.9"
 
     testImplementation "org.jetbrains.kotlin:kotlin-test-junit5:$kotlin_version"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
@@ -75,6 +80,7 @@ shadowJar {
     minimize()
 
     relocate 'org.luaj', 'ru.pyxiion.lib.luaj'
+    relocate 'net.bytebuddy', 'ru.pyxiion.lib.bytebuddy'
 }
 
 remapJar {

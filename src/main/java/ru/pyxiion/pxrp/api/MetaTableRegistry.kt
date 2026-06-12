@@ -11,6 +11,8 @@ object MetaTableRegistry {
     private var _vec = LuaTable()
     private var _inventory = LuaTable()
     private var _container = LuaTable()
+    private var _sidebar = LuaTable()
+    private var _mob = LuaTable()
 
     val ENTITY: LuaTable get() = _entity
     val PLAYER: LuaTable get() = _player
@@ -20,6 +22,8 @@ object MetaTableRegistry {
     val VEC: LuaTable get() = _vec
     val INVENTORY: LuaTable get() = _inventory
     val CONTAINER: LuaTable get() = _container
+    val SIDEBAR: LuaTable get() = _sidebar
+    val MOB: LuaTable get() = _mob
 
     private var byName = mapOf(
         "entity" to _entity,
@@ -30,6 +34,8 @@ object MetaTableRegistry {
         "vec" to _vec,
         "inventory" to _inventory,
         "container" to _container,
+        "sidebar" to _sidebar,
+        "mob" to _mob,
     )
 
     fun init() {
@@ -41,6 +47,8 @@ object MetaTableRegistry {
         _vec = LuaTable()
         _inventory = LuaTable()
         _container = LuaTable()
+        _sidebar = LuaTable()
+        _mob = LuaTable()
         byName = mapOf(
             "entity" to _entity,
             "player" to _player,
@@ -50,6 +58,8 @@ object MetaTableRegistry {
             "vec" to _vec,
             "inventory" to _inventory,
             "container" to _container,
+            "sidebar" to _sidebar,
+            "mob" to _mob,
         )
         initVecMeta(_vec)
         EntityWrapper.initMeta(_entity)
@@ -58,6 +68,8 @@ object MetaTableRegistry {
         StructureWrapper.initMeta(_structure)
         InvWrapper.initMeta(_inventory)
         ContainerWrapper.initMeta(_container)
+        SidebarWrapper.initMeta(_sidebar)
+        MobWrapper.initMeta(_mob)
     }
 
     fun get(name: String): LuaTable = byName[name]

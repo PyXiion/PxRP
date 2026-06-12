@@ -4,6 +4,7 @@ import me.lucko.fabric.api.permissions.v0.Permissions
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents
@@ -17,7 +18,6 @@ import net.minecraft.registry.Registries
 import net.minecraft.server.command.CommandManager
 import net.minecraft.text.Text
 import org.luaj.vm2.LuaError
-import org.luaj.vm2.LuaFunction
 import org.luaj.vm2.LuaValue
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -28,9 +28,12 @@ import net.fabricmc.fabric.api.event.player.UseItemCallback
 import net.minecraft.util.Hand
 import ru.pyxiion.pxrp.api.EntityWrapper
 import ru.pyxiion.pxrp.api.ItemStackWrapper
+import ru.pyxiion.pxrp.api.MobAIManager
+import ru.pyxiion.pxrp.api.MobWrapper
 import ru.pyxiion.pxrp.api.PlayerWrapper
 import ru.pyxiion.pxrp.api.Vector
 import ru.pyxiion.pxrp.api.ContainerManager
+import ru.pyxiion.pxrp.api.SidebarManager
 import ru.pyxiion.pxrp.storage.JsonBackend
 import ru.pyxiion.pxrp.storage.StorageManager
 
@@ -53,6 +56,8 @@ class PxRp : ModInitializer {
                 luaLoader = LuaCmdLoader(server, storageManager!!)
                 luaLoader.reload()
                 luaLoader.eventManager.fire("server_start")
+                luaLoader.eventManager.fire("init")
+
             } catch (e: Throwable) {
                 logger.error("Ошибка при запуске PxRP: ${e.message}", e)
             }
@@ -62,9 +67,11 @@ class PxRp : ModInitializer {
             try {
                 if (storageManager != null) {
                     luaLoader.scheduler.clear()
+                    luaLoader.eventManager.fire("uninit")
                     luaLoader.eventManager.fire("server_stop")
                 }
             } catch (_: UninitializedPropertyAccessException) { }
+            LuaMixinManager.clearHooks()
             storageManager?.close()
         })
 
@@ -74,6 +81,12 @@ class PxRp : ModInitializer {
             }
         })
 
+        ServerEntityEvents.ENTITY_LOAD.register { entity, world ->
+            if (::luaLoader.isInitialized) {
+                MobAIManager.onEntityLoad(entity, world)
+            }
+        }
+
         ServerPlayConnectionEvents.INIT.register(fun(handler, server) {
             if (storageManager != null) {
                 val luaPlayer = PlayerWrapper(handler.player).toLuaValue()
@@ -81,16 +94,6 @@ class PxRp : ModInitializer {
                 if (results.any { it.isboolean() && !it.toboolean() }) {
                     handler.disconnect(Text.literal("You are not allowed to join this server"))
                 }
-            }
-            // Restore personal sidebar after initial scoreboard sync
-            if (::luaLoader.isInitialized) {
-                val player = handler.player
-                luaLoader.scheduler.schedule(2, object : LuaFunction() {
-                    override fun call(): LuaValue {
-                        luaLoader.personalSidebarManager.restoreForPlayer(player)
-                        return LuaValue.NIL
-                    }
-                })
             }
         })
 
@@ -102,7 +105,8 @@ class PxRp : ModInitializer {
                 luaLoader.eventManager.fire("player_leave", luaPlayer)
             }
             storageManager?.removePlayerData(handler.player.uuid.toString())
-            luaLoader.personalSidebarManager.removeForPlayer(handler.player)
+            SidebarManager.removeForPlayer(handler.player)
+            MobAIManager.mobWrappers.remove(handler.player.uuid)
         })
 
         ServerLivingEntityEvents.AFTER_DEATH.register(fun(entity, source) {

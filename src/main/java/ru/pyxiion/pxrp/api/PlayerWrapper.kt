@@ -26,6 +26,7 @@ import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
 import org.luaj.vm2.lib.jse.CoerceJavaToLua
+import me.lucko.fabric.api.permissions.v0.Permissions
 import ru.pyxiion.pxrp.PxRp
 
 class PlayerWrapper(private val entity: ServerPlayerEntity) {
@@ -43,7 +44,8 @@ class PlayerWrapper(private val entity: ServerPlayerEntity) {
     companion object {
         private val playerKeys = listOf(
             "food", "saturation", "gamemode", "ping", "xpLevel", "xpProgress",
-            "isOp", "selectedSlot", "isFlying", "sidebar", "data",
+            "isOp", "selectedSlot", "isFlying", "data", "sidebar",
+            "hasPermission",
             "sendMessage", "sendActionBar", "sendTitle", "kick",
             "teleport", "damage", "heal", "playSound", "give", "setItem", "getItem", "clear",
         )
@@ -66,16 +68,7 @@ class PlayerWrapper(private val entity: ServerPlayerEntity) {
                         "selectedSlot" -> LuaValue.valueOf(e.inventory.selectedSlot)
                         "isFlying" -> LuaValue.valueOf(e.abilities.flying)
                         "sidebar" -> {
-                            val cached = self.rawget("sidebar")
-                            if (!cached.isnil()) return cached
-                            val manager = PxRp.instance.luaLoader.personalSidebarManager
-                            if (manager.getSidebar(e) != null) {
-                                val proxy = sidebarProxy(e)
-                                self.rawset("sidebar", proxy)
-                                proxy
-                            } else {
-                                LuaValue.NIL
-                            }
+                            SidebarManager.get(e)?.toLuaValue() ?: LuaValue.NIL
                         }
                         else -> {
                             val metaVal = meta.get(key)
@@ -110,24 +103,25 @@ class PlayerWrapper(private val entity: ServerPlayerEntity) {
                         "mainhand" -> setSlot(e, e.inventory.selectedSlot, value)
                         "offhand" -> setSlot(e, PlayerInventory.OFF_HAND_SLOT, value)
                         "sidebar" -> {
-                            val manager = PxRp.instance.luaLoader.personalSidebarManager
                             if (value.isnil()) {
-                                manager.clearSidebar(e)
+                                SidebarManager.removeForPlayer(e)
                             } else if (value.istable()) {
-                                val t = value.checktable()
-                                val title = t.get("title").optjstring(null)
-                                val lines = mutableListOf<String>()
-                                val linesTable = t.get("lines")
-                                if (linesTable.istable()) {
-                                    val lt = linesTable.checktable()
-                                    var i = 1
-                                    while (true) {
-                                        val v = lt.rawget(i++)
-                                        if (v.isnil()) break
-                                        if (v.isstring()) lines.add(v.tojstring())
-                                    }
+                                val config = value.checktable()
+                                val existing = SidebarManager.get(e)
+                                val wrapper = existing ?: SidebarManager.create(e, config.rawget("title").optjstring("Sidebar"))
+
+                                val title = config.rawget("title")
+                                if (title.isstring()) wrapper.setTitle(title.tojstring())
+
+                                val lines = config.rawget("lines")
+                                if (lines.istable()) wrapper.setLinesFromTable(lines.checktable())
+
+                                val visible = config.rawget("visible")
+                                if (visible.isboolean()) {
+                                    if (visible.toboolean()) wrapper.show() else wrapper.hide()
+                                } else if (existing == null) {
+                                    wrapper.show()
                                 }
-                                manager.setSidebar(e, lines, title)
                             }
                         }
                         else -> {
@@ -157,6 +151,15 @@ class PlayerWrapper(private val entity: ServerPlayerEntity) {
                         }
                     }
                     return LuaValue.varargsOf(arrayOf(iterator, self, LuaValue.NIL))
+                }
+            })
+
+            meta.rawset("hasPermission", object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val self = args.arg(1).checktable()
+                    val e = self.rawget("__pxrp_object").checkuserdata() as ServerPlayerEntity
+                    val permission = args.arg(2).checkjstring()
+                    return LuaValue.valueOf(Permissions.check(e, permission))
                 }
             })
 
@@ -358,59 +361,6 @@ class PlayerWrapper(private val entity: ServerPlayerEntity) {
             }
             e.inventory.setStack(slot, stack)
             e.currentScreenHandler.sendContentUpdates()
-        }
-
-        private fun sidebarProxy(e: ServerPlayerEntity): LuaValue {
-            val meta = LuaTable()
-            meta.set("__index", object : VarArgFunction() {
-                override fun invoke(args: Varargs): Varargs {
-                    val key = args.arg(2).tojstring()
-                    val manager = PxRp.instance.luaLoader.personalSidebarManager
-                    val data = manager.getSidebar(e) ?: return LuaValue.NIL
-                    return when (key) {
-                        "title" -> LuaValue.valueOf(data.title)
-                        "lines" -> {
-                            val t = LuaTable()
-                            for ((i, line) in data.lines.withIndex()) {
-                                t.rawset(i + 1, LuaValue.valueOf(line))
-                            }
-                            t
-                        }
-                        else -> LuaValue.NIL
-                    }
-                }
-            })
-            meta.set("__newindex", object : VarArgFunction() {
-                override fun invoke(args: Varargs): Varargs {
-                    val key = args.arg(2).tojstring()
-                    val value = args.arg(3)
-                    val manager = PxRp.instance.luaLoader.personalSidebarManager
-                    when (key) {
-                        "title" -> {
-                            if (value.isstring()) {
-                                manager.setSidebarTitle(e, value.tojstring())
-                            }
-                        }
-                        "lines" -> {
-                            if (value.istable()) {
-                                val lines = mutableListOf<String>()
-                                val t = value.checktable()
-                                var i = 1
-                                while (true) {
-                                    val v = t.rawget(i++)
-                                    if (v.isnil()) break
-                                    if (v.isstring()) lines.add(v.tojstring())
-                                }
-                                manager.setSidebarLines(e, lines)
-                            }
-                        }
-                    }
-                    return LuaValue.NIL
-                }
-            })
-            val t = LuaTable()
-            t.setmetatable(meta)
-            return t
         }
     }
 }

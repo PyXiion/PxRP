@@ -4,6 +4,7 @@ import net.minecraft.entity.Entity
 import net.minecraft.entity.LivingEntity
 import net.minecraft.entity.SpawnReason
 import net.minecraft.entity.attribute.EntityAttributes
+import net.minecraft.entity.mob.MobEntity
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.nbt.NbtOps
 import net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket
@@ -139,7 +140,10 @@ class WorldWrapper(private val world: ServerWorld) {
                         return LuaValue.NIL
                     }
 
-                    return EntityWrapper(entity).toLuaValue()
+                    return when (entity) {
+                        is MobEntity -> MobWrapper(entity).toLuaValue()
+                        else -> EntityWrapper(entity).toLuaValue()
+                    }
                 }
             })
 
@@ -292,12 +296,16 @@ class WorldWrapper(private val world: ServerWorld) {
 
                     val list = LuaTable()
                     entities.forEachIndexed { i, entity ->
-                        list.set(i + 1, EntityWrapper(entity).toLuaValue())
+                        list.set(i + 1, when (entity) {
+                            is MobEntity -> MobWrapper(entity).toLuaValue()
+                            else -> EntityWrapper(entity).toLuaValue()
+                        })
                     }
                     return list
                 }
             })
 
+            // .raycast(self, start, dir, range, includeFluids=false, includeEntities=true)
             meta.rawset("raycast", object : VarArgFunction() {
                 override fun invoke(args: Varargs): Varargs {
                     val self = args.arg(1).checktable()

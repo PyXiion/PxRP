@@ -1,6 +1,8 @@
 package ru.pyxiion.pxrp.api
 
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.entity.Entity
+import net.minecraft.entity.mob.MobEntity
 import net.minecraft.inventory.SimpleInventory
 import net.minecraft.nbt.NbtIo
 import net.minecraft.nbt.NbtSizeTracker
@@ -20,6 +22,8 @@ import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
 import org.luaj.vm2.lib.VarArgFunction
+import org.luaj.vm2.lib.jse.CoerceJavaToLua
+import ru.pyxiion.pxrp.LuaMixinManager
 import ru.pyxiion.pxrp.Scheduler
 import ru.pyxiion.pxrp.asVarArgFunction
 import ru.pyxiion.pxrp.luaTableOf
@@ -247,7 +251,12 @@ class LuaMcApi(
     private fun luaGetEntity(args: Varargs): Varargs {
         val uuid = UUID.fromString(args.arg(1).checkjstring())
         for (world in server.worlds) {
-            world.getEntity(uuid)?.let { return EntityWrapper(it).toLuaValue() }
+            world.getEntity(uuid)?.let {
+                return when (it) {
+                    is MobEntity -> MobWrapper(it).toLuaValue()
+                    else -> EntityWrapper(it).toLuaValue()
+                }
+            }
         }
         return LuaValue.NIL
     }
@@ -333,6 +342,63 @@ class LuaMcApi(
                     if (size < 9 || size > 54 || size % 9 != 0)
                         throw LuaError("mc.createInventory: размер должен быть кратен 9 и от 9 до 54")
                     return InvWrapper(LockableInventory(size)).toLuaValue()
+                }
+            },
+
+            "observeHook" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    require(args.narg() == 3) { "mc.observeHook(class, method, callback) requires 3 arguments" }
+                    val className = args.arg(1).checkjstring()
+                    val methodName = args.arg(2).checkjstring()
+                    val callback = args.arg(3).checkfunction()
+                    LuaMixinManager.observeHook("named", className, methodName) { instance, mcArgs ->
+                        val luaArgs = ArrayList<LuaValue>(1 + (mcArgs?.size ?: 0))
+                        luaArgs.add(CoerceJavaToLua.coerce(instance))
+                        mcArgs?.forEach { luaArgs.add(CoerceJavaToLua.coerce(it)) }
+                        callback.invoke(luaArgs.toTypedArray())
+                    }
+                    return NIL
+                }
+            },
+
+            "removeHook" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    require(args.narg() == 2) { "mc.removeHook(class, method) requires 2 arguments" }
+                    val className = args.arg(1).checkjstring()
+                    val methodName = args.arg(2).checkjstring()
+                    val removed = LuaMixinManager.removeHook("named", className, methodName)
+                    return LuaValue.valueOf(removed)
+                }
+            },
+
+            "clearHooks" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    require(args.narg() == 0) { "mc.clearHooks() takes no arguments" }
+                    LuaMixinManager.clearHooks()
+                    return NIL
+                }
+            },
+
+            "runtimeNamespace" to LuaValue.valueOf(
+                FabricLoader.getInstance().mappingResolver.currentRuntimeNamespace
+            ),
+
+            "mapped" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    val mappingResolver = FabricLoader.getInstance().mappingResolver
+                    val mappingNamespace = mappingResolver.currentRuntimeNamespace
+
+                    return valueOf(mappingResolver.mapClassName("named", args.arg(1).checkjstring()))
+                }
+            },
+
+            "registerBehaviour" to object : VarArgFunction() {
+                override fun invoke(args: Varargs): Varargs {
+                    require(args.narg() == 2) { "registerBehaviour(id, fn) requires 2 arguments" }
+                    val id = args.arg(1).checkjstring()
+                    val fn = args.arg(2).checkfunction()
+                    MobAIManager.registerBehaviour(id, fn)
+                    return NIL
                 }
             },
         )

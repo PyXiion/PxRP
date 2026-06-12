@@ -21,8 +21,11 @@ A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define
 - [World API](#world-api)
 - [Entity Wrapper](#entity-wrapper)
 - [Structure Wrapper](#structure-wrapper)
+- [Custom Modules & `require`](#custom-modules--require)
 - [Bundled Lua Libraries](#bundled-lua-libraries)
+- [Debugging & Error Handling](#debugging--error-handling)
 - [Events Reference](#events-reference)
+- [Runtime Mixins (Experimental)](#runtime-method-hooking-experimental)
 - [Built-in Lua Standard Libraries](#built-in-lua-standard-libraries)
 - [Storage](#storage)
 - [License](#license)
@@ -35,14 +38,15 @@ A Lua-scriptable roleplay command framework for Minecraft Fabric servers. Define
 - **Rich argument types** — Supports `text`, `word`, `target`/`player`, `int`, `double`, `float`, `bool`, `block_pos`, and custom choices (`choice=a,b,c`) with validation.
 - **Minecraft API exposed to Lua** — Trigger particles, sounds, global/range broadcasting, block manipulation, entity spawning, world time/weather control, and server time access.
 - **Persistent data storage** — Key-value data per player (`ctx.player.data`) and globally (`mc.data`), auto-persisted to JSON.
-- **Permission system** — Integrates with the Fabric Permissions API (supports both OP-based and permissions plugins like LuckPerms).
-- **Player context** — Handlers receive a live `Player` wrapper object with readable properties (health, position, gamemode, etc.) and methods (`sendMessage`, `teleport`, `kick`, `give`).
+- **Permission system** — Integrates with the Fabric Permissions API (supports both OP-based and permissions plugins like LuckPerms). Check permissions at runtime with `player:hasPermission(perm)`.
+- **Player context** — Handlers receive a live `Player` wrapper object with readable properties (health, position, gamemode, etc.) and methods (`sendMessage`, `teleport`, `kick`, `give`, `hasPermission`).
 - **Structure loading** — Load and place Minecraft structure files with rotation, mirroring, and per-entity Lua callbacks.
 - **Vector API** — `Vec(x, y, z)` global constructor with arithmetic operators (`+`, `-`, `*`, `/`, `unm`, `==`, `tostring`). Component-wise for `v1 * v2`, scalar for `v / n`. Both `v * n` and `n * v` work.
 - **Entity API** — `entity:damage(amount, source?)`, `entity:raycast(range)`, `entity:addEffect/removeEffect/hasEffect`, `entity:setOnFireFor(ticks)`, `entity:readNbt()/writeNbt(table)`.
 - **Debug dumping** — `mc.dump(obj, depth?)` prints any Lua value as readable nested output with cycle detection.
 - **Metatable extensions** — `mc.getMetatable("player"/"entity"/"world"/"structure"/"vec")` allows adding custom methods to all wrappers of that type.
-- **Per-player sidebar** — `player.sidebar = {title = "...", lines = {...}}` for packet-based scoreboard display.
+- **Per-player sidebar** — `player.sidebar` smart property: assign a config table to create/update (`player.sidebar = {title=..., lines=...}`), read back the sidebar object with `title`/`lines` properties and `setLine`/`show`/`hide`/`destroy` methods. Packet-based scoreboard display that does not touch the global scoreboard.
+- **Async API** — `mc.fetch(url)` / `mc.fetch({...})` for HTTP requests (GET, POST, PUT, PATCH, DELETE, HEAD) with response table (`.ok`, `.status`, `.text`, `.headers`, lazy `.json`). `mc.sleep(ticks)` for coroutine-based sequential async without callback nesting. JSON auto-encoding for request bodies and lazy decoding for responses.
 - **Lua libraries** — Bundled `format.lua` (f-string-like templating), `simple.lua` (concise command registration), and `chestgui.lua` (chest-based GUI with grid positioning).
 
 ## Quick Start
@@ -304,6 +308,75 @@ mc.cancelTask(id)
 * Callback errors are caught and logged per-task without affecting other tasks.
 * Callbacks run on the server tick thread — do not perform blocking operations.
 
+### `mc.sleep(ticks)`
+
+Yields the current Lua coroutine and resumes after `ticks` (20 ticks = 1 second). Enables sequential async code without callback nesting.
+
+```lua
+mc.sleep(20)  -- wait 1 second
+```
+
+Combined with `mc.fetch`:
+```lua
+local res = mc.fetch("https://api.example.com/data")
+if res.ok then
+    local data = res.json
+    mc.sleep(100)  -- 5 seconds
+    local res2 = mc.fetch("https://api.example.com/process/" .. data.id)
+end
+```
+
+All yielded coroutines are discarded on `/pxrp reload` (new LuaState).
+
+### `mc.fetch(url)` / `mc.fetch({...})` → Response
+
+Performs an HTTP request using Java's `HttpClient`. Accepts a plain URL string for GET, or a request table for full control. Returns a **response object** with the same metatable as all fetch results.
+
+**Simple GET:**
+```lua
+local res = mc.fetch("https://api.example.com/data")
+```
+
+**Full request table:**
+```lua
+local res = mc.fetch({
+    url     = "https://api.example.com/data",
+    method  = "POST",
+    headers = { Authorization = "Bearer token123" },
+    body    = "raw body text",       -- raw string body
+    -- or --
+    json    = { key = "value" },     -- auto-encoded as JSON (mutually exclusive with body)
+    timeout = 5000,                  -- ms, optional
+})
+```
+
+When `json` is provided, `Content-Type: application/json` is set automatically unless you provide your own.
+
+**Response object fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `res.ok` | boolean | `true` for 2xx status codes |
+| `res.status` | number | HTTP status code (200, 404, etc.) |
+| `res.text` | string | Raw response body |
+| `res.headers` | table | Response headers (first value per key) |
+| `res.json` | table or nil | **Lazy** — parsed from body on first access; throws `LuaError` if not valid JSON |
+| `res.error` | string | Set only on network failures (timeout, DNS, etc.) |
+
+```lua
+local res = mc.fetch("https://api.example.com/user/1")
+if res.ok then
+    print("Status:", res.status)
+    print("Body:", res.text)
+
+    -- .json is lazy — parsed on first access
+    local data = res.json
+    print("Name:", data.name)
+else
+    print("Error:", res.error)
+end
+```
+
 ### `mc.players()` → table
 
 Returns an array of [Player](#player-api) wrappers for all online players. Wrappers are cached per UUID — repeated calls reuse the same Lua objects.
@@ -420,6 +493,35 @@ mc.emit("server_start")
 mc.emit("player_chat", somePlayer, "hello")
 ```
 
+### Runtime Method Hooking (Experimental)
+
+> **⚠️ Warning: This API is unstable and experimental.** It uses ByteBuddy runtime instrumentation and may be completely removed in future versions. Prefer `mc.on()` events when possible.
+
+#### `mc.observeHook(className, methodName, callback)`
+
+Hooks into an arbitrary Java method at runtime via ByteBuddy. The callback receives the method's `instance` and arguments whenever the hooked method is called.
+
+```lua
+mc.observeHook("net.minecraft.server.MinecraftServer", "getTickCount", function(instance, args)
+    -- called every time getTickCount is invoked
+end)
+```
+
+#### `mc.removeHook(className, methodName)` → boolean
+
+Removes a previously installed observe hook. Returns `true` if found and removed.
+
+```lua
+mc.removeHook("net.minecraft.server.MinecraftServer", "getTickCount")
+```
+
+#### `mc.clearHooks()`
+
+Removes all installed observe hooks.
+
+* Hooks are automatically cleared on `/pxrp reload` and server stop.
+* Only single-overload methods can be hooked (ambiguous methods are rejected).
+
 ---
 
 ## Player API
@@ -496,6 +598,7 @@ ctx.player:teleport(100, 64, 200)
 | `teleport` | x, y, z, [worldName=nil] | Teleport (intra-world or cross-dimension) |
 | `damage` | amount | Deal generic damage |
 | `heal` | amount | Heal health |
+| `hasPermission` | permission | Check Fabric Permissions API (supports LuckPerms, etc.) → boolean |
 | `playSound` | id, [volume=1], [pitch=1] | Play a sound to the player |
 | `give` | item | Give item — either a string (e.g. `"minecraft:diamond 5"`) or an ItemStack wrapper |
 | `setItem` | slot, item | Set item in inventory slot (ItemStack or nil) |
@@ -507,21 +610,32 @@ ctx.player:teleport(100, 64, 200)
 A packet-based per-player scoreboard sidebar that does not affect the global scoreboard.
 
 ```lua
--- Create sidebar
-player.sidebar = {
-    title = "My Server",
-    lines = {"Line 1", "Line 2", "Line 3"}
-}
+-- Create + auto-show
+player.sidebar = { title = "My Server", lines = {"Line 1", "Line 2", "Line 3"} }
 
--- Update parts
+-- Read back and use methods
 player.sidebar.title = "New Title"
 player.sidebar.lines = {"Updated!"}
 
--- Remove
-player.sidebar = nil
+-- Partial updates via config table (merges with existing)
+player.sidebar = { lines = {"Only lines change"} }
+player.sidebar = { title = "Only title changes" }
+
+-- Read properties
+player.sidebar.visible    -- boolean
+player.sidebar.lineCount  -- number
+
+-- Set a specific line by 1-indexed position
+player.sidebar:setLine(2, "Edited line 2")
+
+-- Hide / show / destroy
+player.sidebar:hide()       -- hide, keep data
+player.sidebar:show()       -- re-show
+player.sidebar:destroy()    -- permanent removal
+player.sidebar = nil        -- same as destroy
 ```
 
-The sidebar persists across worlds and reconnects (restored 2 ticks after join).
+The sidebar is automatically destroyed on player disconnect.
 
 ### Per-player persistent storage (`ctx.player.data`)
 
@@ -1040,6 +1154,17 @@ Positions are transformed (rotated/mirrored) to match the structure's placement.
 
 ---
 
+## Custom Modules & `require`
+
+You can organize your code into multiple files. The `require` function looks for `.lua` files inside `config/pxrp/`. Subdirectories are fully supported using dot notation:
+
+```lua
+require "my_module"             -- loads config/pxrp/my_module.lua
+require "libs.utils"            -- loads config/pxrp/libs/utils.lua
+```
+
+---
+
 ## Bundled Lua Libraries
 
 Loaded via `require` at the top of any script in `config/pxrp/`:
@@ -1089,6 +1214,16 @@ registerSimple("wave", {}, "*{p.name} waves at everyone*", 15)    -- range 15 bl
 registerSimple("bow", {}, "*{p.name} bows*", nil, true)           -- title overlay
 registerSimple("cheer", {}, "*{p.name} cheers*", 20, 60)          -- both
 ```
+
+---
+
+## Debugging & Error Handling
+
+- **`print(...)`** works exactly as in standard Lua and prints directly to the server console.
+- **`mc.dump(obj)`** is your best friend for inspecting complex wrappers like `ctx.player` or NBT tables.
+- **Error Handling**:
+  - **Syntax errors** are logged to the console on `/pxrp reload`, and the broken script won't be loaded.
+  - **Runtime errors** (e.g., calling a method on `nil`) are caught per-task/per-command. The error and its stack trace are logged to the console, and the execution stops gracefully without crashing the server.
 
 ---
 
@@ -1202,7 +1337,7 @@ end)
 
 ## Built-in Lua Standard Libraries
 
-PxRP loads the following Lua standard libraries via [luaj](https://github.com/luaj/luaj) (targeting Lua 5.2):
+PxRP loads the following Lua standard libraries via [PxLuaNova](https://github.com/pyxiion/pxluanova) (targeting Lua 5.2):
 
 | Library | Globals | Reference |
 |---------|---------|-----------|
@@ -1210,7 +1345,7 @@ PxRP loads the following Lua standard libraries via [luaj](https://github.com/lu
 | **math** | `math.random`, `math.randomseed`, `math.floor`, `math.ceil`, `math.sin`, `math.cos`, `math.sqrt`, `math.min`, `math.max`, `math.pi`, `math.huge` | [§5.6](https://www.lua.org/manual/5.1/manual.html#5.6) |
 | **string** | `string.format`, `string.sub`, `string.find`, `string.match`, `string.gmatch`, `string.gsub`, `string.len`, `string.byte`, `string.char`, `string.rep`, `string.lower`, `string.upper` | [§5.4](https://www.lua.org/manual/5.1/manual.html#5.4) |
 | **table** | `table.insert`, `table.remove`, `table.sort`, `table.concat`, `table.maxn` | [§5.5](https://www.lua.org/manual/5.1/manual.html#5.5) |
-| **bit32** | `bit32.band`, `bit32.bor`, `bit32.bxor`, `bit32.lshift`, `bit32.rshift`, `bit32.arshift`, `bit32.bnot` | [luaj docs](https://github.com/luaj/luaj#functions) |
+| **bit32** | `bit32.band`, `bit32.bor`, `bit32.bxor`, `bit32.lshift`, `bit32.rshift`, `bit32.arshift`, `bit32.bnot` | [Lua 5.2 §5.3](https://www.lua.org/manual/5.2/manual.html#5.3) |
 | **package** | `require`, `package.path`, `package.loaded`, `package.preload` | [§5.3](https://www.lua.org/manual/5.1/manual.html#5.3) |
 
 The following standard libraries are **not** loaded: `io`, `os`, `coroutine`, `debug`.
