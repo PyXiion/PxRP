@@ -1,17 +1,17 @@
-.kotlin/**
-.gradle/**
-build/**
-.idea/**
-run/**
+.kotlin/
+.gradle/
+build/
+.idea/
+run/
 .luarc.json
 .classpath
-bin/**
+bin/
 .project
 .settings/
 logs/
 
 net/
 
-site/.astro/**
-site/node_modules/**
-site/dist/**
+site/.astro/
+site/node_modules/
+site/dist/

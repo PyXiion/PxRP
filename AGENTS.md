@@ -190,7 +190,7 @@ Cancellable events: return `false` to cancel.
 - Delay/interval in ticks (20 ticks = 1 sec)
 - `mc.cancelTask(id)` — returns `false` if `id >= nextId` (never scheduled) or already cancelled
 - All tasks cleared on `/pxrp reload` and server stop
-- Runtime: PxLuaNova (`com.pxluanova:pxluanova-jse:3.1.0`, Lua 5.2 targeting) — published to Maven Local from `/home/pyxiion/Projects/pxluanova`
+- Runtime: PxLuaNova (`com.pxluanova:pxluanova-jse:3.1.0`, Lua 5.2 targeting) — included as composite build from `pxluanova/`
 - Config dir: `config/pxrp/` (all `.lua` alphabetically). Falls back to `config/pxrp.lua`. First run creates `demo.lua` from resource.
 - `package.path`: `config/pxrp/?.lua;config/pxrp/?/init.lua;?.lua`
 - Loaded std libs: `math`, `string`, `table`, `bit32`, `package`, base lib. **Not loaded**: `io`, `os`, `coroutine`, `debug`
@@ -198,6 +198,24 @@ Cancellable events: return `false` to cancel.
 - `require "format"` → `format(template)` / `broadcastFormat(template)`
 - `require "simple"` → `registerSimple(syntax, template, range?, overlay?)`
 - `require "chestgui"` → `chestgui.create(rows, title)` → `gui:set(row,col,item,cb)` / `gui:decorate(row,col,item)` / `gui:open(player)`
+
+## PxLuaNova subproject
+
+`pxluanova/` is a Gradle composite build (3 subprojects). Modified LuaJ fork with virtual-thread coroutines.
+
+```
+./gradlew -p pxluanova build                       # build all modules
+./gradlew -p pxluanova :pxluanova-core:build        # core only
+./gradlew -p pxluanova test                         # run all tests
+```
+
+| Module | Description |
+|--------|-------------|
+| `pxluanova-core` | Interpreter, compiler, std libs (`org.luaj.vm2.*`) |
+| `pxluanova-jse` | Java SE platform, luajava, LuaJC bytecode compiler |
+| `pxluanova-test` | JUnit 4 test suite |
+
+Use `includeBuild 'pxluanova'` in root `settings.gradle` — dependencies `com.pxluanova:pxluanova-*:3.1.0` auto-resolve to project outputs. Local reference repos (`luaj-upstream/`, `wagyourtail-luaj/`, `cobalt-upstream/`) are gitignored in `pxluanova/.gitignore`.
 
 ## Documentation Site
 

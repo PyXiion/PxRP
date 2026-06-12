@@ -1,0 +1,21 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'com.pxluanova'
+version = '3.1.0'
+
+subprojects {
+    group = rootProject.group
+    version = rootProject.version
+
+    repositories {
+        mavenCentral()
+    }
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}

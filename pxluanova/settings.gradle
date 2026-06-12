@@ -1,0 +1,5 @@
+rootProject.name = 'pxluanova'
+
+include 'pxluanova-core'
+include 'pxluanova-jse'
+include 'pxluanova-test'

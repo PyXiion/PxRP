@@ -1,0 +1,8 @@
+luaj-upstream/
+wagyourtail-luaj/
+cobalt-upstream/
+.gradle/
+build/
+*/build/
+*.class
+*.out
